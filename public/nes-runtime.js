@@ -1,0 +1,610 @@
+'use strict';
+/* nes-runtime.js
+ * NES hardware runtime: CPU memory map, PPU (graphics), APU (audio), mapper(NROM),
+ * video output, input. Paired with a generated *rom.js file (6502 -> JS transpilation).
+ * Headless-friendly (works in Node too).
+ */
+(function (g) {
+  'use strict';
+
+  const CPU_CLOCK = 1789772.727;
+  const SAMPLE_RATE = 44100;
+  const CYCLES_PER_FRAME = 29780;
+
+/* Firebrandx 2C02 palette (r,g,b) — มาตรฐานที่ใช้ใน Mesen/FCEUX/Nestopia */
+  const PALETTE_SRC = [
+    [124,124,124],[0,0,252],[0,0,188],[68,40,188],[148,0,132],[168,0,32],[168,16,0],[136,20,0],
+    [80,48,0],[0,120,0],[0,104,0],[0,88,0],[0,64,88],[0,0,0],[0,0,0],[0,0,0],
+    [188,188,188],[0,120,248],[0,88,248],[104,68,252],[216,0,204],[228,0,88],[248,56,0],[228,92,16],
+    [172,124,0],[0,184,0],[0,168,0],[0,168,68],[0,136,136],[0,0,0],[0,0,0],[0,0,0],
+    [248,248,248],[60,188,252],[104,136,252],[152,120,248],[248,120,248],[248,88,152],[248,120,88],[252,160,68],
+    [248,184,0],[184,248,24],[88,216,84],[88,248,152],[0,232,216],[120,120,120],[0,0,0],[0,0,0],
+    [252,252,252],[164,228,252],[184,184,248],[216,184,248],[248,184,248],[248,164,192],[240,208,176],[252,224,168],
+    [248,216,120],[216,248,120],[184,248,184],[184,248,216],[0,252,252],[248,216,248],[0,0,0],[0,0,0]
+  ];
+  const PALETTE = new Uint8Array(64 * 3);
+  for (let i = 0; i < 64; i++) { PALETTE[i * 3] = PALETTE_SRC[i][0]; PALETTE[i * 3 + 1] = PALETTE_SRC[i][1]; PALETTE[i * 3 + 2] = PALETTE_SRC[i][2]; }
+
+  const LENGTH = [0x0A,0xFE,0x14,0x02,0x28,0x04,0x50,0x06,0xA0,0x08,0x3C,0x0A,0x0E,0x0C,0x1A,0x0E,0x0C,0x10,0x18,0x12,0x30,0x14,0x60,0x16,0xC0,0x18,0x48,0x1A,0x10,0x1C,0x20,0x1E];
+  const NOISE_PERIOD = [4,8,16,32,64,96,128,160,202,254,380,508,762,1016,2034,4068];
+  const DMC_FREQ = [428,380,340,320,286,254,226,214,190,160,142,128,106,84,72,54];
+  const DUTY = [
+    [0,0,0,0,0,0,0,1],
+    [0,0,0,0,0,0,1,1],
+    [0,0,0,0,1,1,1,1],
+    [1,1,1,1,1,1,0,0]
+  ];
+
+  function createSystem(opts) {
+    opts = opts || {};
+    const rom = opts.rom;
+
+    // ------------------------------------------------------------ CPU / PPU / APU
+    const ram = new Uint8Array(0x800);
+    const ppu = {
+      ctrl: 0, mask: 0, status: 0,
+      oamAddr: 0, oam: new Uint8Array(256),
+      v: 0, t: 0, w: 0,
+      fineX: 0, scrollX: 0, scrollY: 0,
+      vram: new Uint8Array(0x4000),
+      dataBuf: 0,
+      sp0HitFrame: false,
+      frameBuffered: false,
+    };
+    if (rom) ppu.vram.set(rom.chr.subarray(0, 0x2000), 0);
+    if (ppu.vram[0x3F00] === undefined || ppu.vram[0x3F00] === 0) ppu.vram[0x3F00] = 0x0F;
+
+    function ppuPalAddr(a) {
+      a = (a - 0x3F00) & 0x1F;
+      if (a >= 0x10 && (a & 3) === 0) a -= 0x10;
+      return 0x3F00 + a;
+    }
+    function ppuMap(a) {
+      a &= 0x3FFF;
+      if (a >= 0x3F00) return ppuPalAddr(a);
+      if (a >= 0x3000) return a - 0x1000;
+      if (a >= 0x2000) return 0x2000 | (a & 0x7FF);
+      return a;
+    }
+
+    // ---- APU state
+    const p1 = mkPulse(cpuWriteHandler());
+    function mkPulse(getCpu) {
+      return { reg: [0,0,0,0], len: 0, freq: 0, phase: 0, freqCtr: 0, envDiv: 0, envVol: 0, sweepDiv: 0, muted: false };
+    }
+    function cpuWriteHandler() { return function () {}; }
+
+    const tri = { reg: [0,0,0], len: 0, freq: 0, phase: 0, freqCtr: 0, linear: 0, linearReload: 0 };
+    const noise = { reg: [0,0,0], len: 0, freq: 0, freqCtr: 0, lfsr: 1, envDiv: 0, envVol: 0 };
+    const dmc = {
+      freq: 0, irqFlag: false, loop: false, delta: 0,
+      startAddr: 0, startLen: 0, curAddr: 0, bytesLeft: 0,
+      buf: 0, bitsLeft: 0, bufFull: false, active: false, freqCtr: 0,
+      irqLatched: false,
+    };
+
+    const readPrg = function (a) {
+      a &= 0xFFFF;
+      const half = (a >= 0xC000) ? (rom.prg.length > 0x4000 ? 1 : 0) : 0;
+      const v = rom.prg[(a & 0x3FFF) + half * 0x4000];
+      return v === undefined ? 0 : v;
+    };
+
+    const cpu = {
+      A: 0, X: 0, Y: 0, P: 0x24, SP: 0xFD, PC: 0x8000,
+      cycles: 0, budget: CYCLES_PER_FRAME, fb: false,
+      vblCleared: false, vblClearCycles: 2273,
+      nmi: false, irq: false, halted: false, haltPC: 0,
+      exec: null, ram,
+      r8: function (a) {
+        a &= 0xFFFF;
+        if (a < 0x2000) return ram[a & 0x7FF];
+        if (a < 0x4000) {
+          switch (a & 7) {
+            case 2: return ppu.readStatus();
+            case 4: return ppu.readOAM();
+            case 7: return ppu.readData();
+            default: return 0;
+          }
+        }
+        if (a === 0x4015) return apu.readStatus();
+        if (a >= 0x4016 && a <= 0x4017) return controllerRead(a === 0x4016 ? 0 : 1);
+        if (a >= 0x8000) return readPrg(a);
+        return 0;
+      },
+      w8: function (a, v) {
+        a &= 0xFFFF; v &= 0xFF;
+        if (a < 0x2000) { ram[a & 0x7FF] = v; return; }
+        if (a < 0x4000) {
+          switch (a & 7) {
+            case 0: ppu.writeCtrl(v); return;
+            case 1: ppu.writeMask(v); return;
+            case 3: ppu.oamAddr = v; return;
+            case 4: ppu.writeOAM(v); return;
+            case 5: ppu.writeScroll(v); return;
+            case 6: ppu.writeAddr(v); return;
+            case 7: ppu.writeData(v); return;
+          }
+          return;
+        }
+        if (a === 0x4014) { ppu.oam.set(ram.subarray(v << 8, (v << 8) + 256)); cpu.cycles += 513; return; }
+        if (a === 0x4015) { apu.writeEnable(v); return; }
+        if (a === 0x4016) { controllerWrite(v); return; }
+        if (a === 0x4017) { return; } /* frame counter select: ignored */
+        if (a >= 0x4000 && a <= 0x4013) { apu.writeReg(a - 0x4000, v); return; }
+      },
+      r16: function (a) { return (this.r8(a)) | (this.r8(a + 1) << 8); },
+      push8: function (v) { ram[0x100 | this.SP] = v & 0xFF; this.SP = (this.SP - 1) & 0xFF; },
+      push16: function (v) { this.push8((v >> 8) & 0xFF); this.push8(v & 0xFF); },
+      pop8: function () { this.SP = (this.SP + 1) & 0xFF; return ram[0x100 | this.SP]; },
+      pop16: function () { const lo = this.pop8(); const hi = this.pop8(); return (hi << 8) | lo; },
+      setZN: function (v) { v &= 0xFF; this.P = (this.P & ~0x82) | (v === 0 ? 0x02 : 0) | (v & 0x80); },
+      tick: function (n) {
+        this.cycles += n;
+        if (this.cycles >= this.vblClearCycles && !this.vblCleared && (ppu.status & 0x80)) {
+          this.vblCleared = true;
+          ppu.status &= 0x7F; /* vblank ends when rendering starts */
+        }
+        if (this.cycles >= this.budget) this.fb = true;
+      },
+      doInt: function () {
+        const vec = this.nmi ? rom.vectors.nmi : rom.vectors.irq;
+        this.push16(this.PC & 0xFFFF);
+        this.push8((this.P & 0xEF) | 0x20);
+        this.P |= 0x04;
+        this.PC = vec;
+        this.nmi = false; this.irq = false;
+      },
+      halt: function (pc) { this.halted = true; this.haltPC = pc; msg('CPU halted at $' + pc.toString(16).toUpperCase() + ' (unreachable state)'); },
+    };
+
+    // ---- PPU register handlers
+    ppu.readStatus = function () {
+      const s = this.status;
+      this.status &= 0x7F;
+      this.w = 0;
+      return s;
+    };
+    ppu.readOAM = function () { return this.oam[this.oamAddr]; };
+    ppu.writeOAM = function (v) { this.oam[this.oamAddr] = v & 0xFF; this.oamAddr = (this.oamAddr + 1) & 0xFF; };
+    ppu.advanceV = function () { this.v = (this.v + (this.ctrl & 0x04 ? 32 : 1)) & 0x3FFF; };
+    ppu.writeCtrl = function (v) {
+      this.ctrl = v;
+      if (this.w === 0) this.t = (this.t & ~0x0C00) | ((v & 3) << 10);
+      if ((v & 0x80) && (this.status & 0x80)) cpu.nmi = true;
+    };
+    ppu.writeMask = function (v) { this.mask = v; };
+    ppu.writeScroll = function (v) {
+      if (this.w === 0) {
+        this.fineX = v & 7;
+        this.scrollX = v & 0xFF;
+        this.t = (this.t & 0xFFE0) | ((v >> 3) & 0x1F) | ((v & 7) << 12);
+        this.w = 1;
+      } else {
+        this.scrollY = ((v >> 3) & 0x1F) * 8 + (v & 7);
+        this.t = (this.t & 0x8C1F) | (((v >> 3) & 0x1F) << 5) | ((v & 7) << 12);
+        this.w = 0;
+      }
+    };
+    ppu.writeAddr = function (v) {
+      if (this.w === 0) {
+        this.t = (this.t & 0x80FF) | ((v & 0x3F) << 8);
+        this.w = 1;
+      } else {
+        this.t = (this.t & 0xFF00) | v;
+        this.v = this.t;
+        this.w = 0;
+      }
+    };
+    ppu.writeData = function (v) {
+      const a = ppuMap(this.v);
+      if (a >= 0x3F00) v &= 0x3F;
+      this.vram[a] = v & 0xFF;
+      this.advanceV();
+    };
+    ppu.readData = function () {
+      const a = ppuMap(this.v);
+      const b = this.dataBuf;
+      this.dataBuf = (a >= 0x3F00) ? (this.vram[a] & 0x3F) : this.vram[a];
+      this.advanceV();
+      return b;
+    };
+
+    // ---- APU register handlers
+    const apu = {
+      p1, p2: mkPulse(cpuWriteHandler()), tri, noise, dmc,
+      cycleSince: 0,
+      sweepTick: false,
+      readStatus: function () {
+        let s = 0;
+        if (this.p1.len > 0) s |= 1;
+        if (this.p2.len > 0) s |= 2;
+        if (this.tri.len > 0) s |= 4;
+        if (this.noise.len > 0) s |= 8;
+        if (this.dmc.active || this.dmc.bytesLeft > 0) s |= 16;
+        s |= this.dmc.irqLatched ? 0x40 : 0;
+        this.dmc.irqLatched = false;
+        return s;
+      },
+      writeEnable: function (v) {
+        if (!(v & 1)) this.p1.len = 0;
+        if (!(v & 2)) this.p2.len = 0;
+        if (!(v & 4)) this.tri.len = 0;
+        if (!(v & 8)) this.noise.len = 0;
+        const was = this.dmc.active || this.dmc.bitsLeft > 0;
+        if (!(v & 0x10)) {
+          this.dmc.active = false; this.dmc.bitsLeft = 0; this.dmc.bufFull = false;
+        } else if (!was && !this.dmc.bufFull && this.dmc.startLen > 0) {
+          this.dmc.active = true;
+          this.dmc.curAddr = this.dmc.startAddr;
+          this.dmc.bytesLeft = this.dmc.startLen;
+          dmcLoad(this);
+        }
+      },
+      writeReg: function (i, v) {
+        v &= 0xFF;
+        if (i <= 3) applyPulse(this.p1, i, v);
+        else if (i <= 7) applyPulse(this.p2, i - 4, v);
+        else if (i === 8) { this.tri.reg[0] = v; }
+        else if (i === 10) { this.tri.reg[1] = v; this.tri.freq = (this.tri.freq & 0xFF00) | v; }
+        else if (i === 11) { this.tri.reg[2] = v; this.tri.freq = (this.tri.freq & 0x00FF) | ((v & 7) << 8); this.tri.len = LENGTH[(v >> 3) & 0x1F]; }
+        else if (i === 12) { this.noise.reg[0] = v; }
+        else if (i === 14) { this.noise.reg[1] = v; this.noise.freq = NOISE_PERIOD[v & 0x0F]; }
+        else if (i === 15) { this.noise.reg[2] = v; this.noise.len = LENGTH[(v >> 3) & 0x1F]; }
+        else if (i === 16) { this.dmc.freq = DMC_FREQ[v & 0x0F]; this.dmc.irqFlag = (v & 0x80) !== 0; this.dmc.loop = (v & 0x40) !== 0; }
+        else if (i === 17) { this.dmc.delta = v & 0x7F; }
+        else if (i === 18) { this.dmc.startAddr = 0xC000 + (v << 6); }
+        else if (i === 19) { this.dmc.startLen = (v << 4) | 1; }
+      },
+      stepCycles: function (n) {
+        this.cycleSince += n;
+        const quarters = Math.floor(this.cycleSince / 7458);
+        if (quarters > 0) { this.cycleSince -= quarters * 7458; for (let q = 0; q < quarters; q++) this.quarter(); }
+        while (n-- > 0) step1cycle(this);
+      },
+      quarter: function () {
+        qPulse(this.p1);
+        qPulse(this.p2);
+        qTri(this.tri);
+        qNoise(this.noise);
+        this.sweepTick = !this.sweepTick;
+        if (this.sweepTick) { sweepPulse(this.p1, true); sweepPulse(this.p2, false); }
+      },
+    };
+    function sweepPulse(p, isP1) {
+      const reg = p.reg[1];
+      if (!(reg & 0x80)) return;
+      if (p.sweepDiv > 0) { p.sweepDiv--; return; }
+      p.sweepDiv = ((reg >> 4) & 7) + 1;
+      const amt = p.freq >> (reg & 7);
+      let target;
+      if (reg & 0x08) target = p.freq - amt - (isP1 ? 1 : 0);
+      else target = p.freq + amt;
+      if (target < 8 || target > 0x7FF) p.muted = true;
+      else p.freq = target;
+    }
+    function qPulse(p) {
+      if (p.len > 0) p.len--;
+      if (p.reg[0] & 0x10) {
+        if (p.envDiv > 0) { p.envDiv--; }
+        else {
+          p.envDiv = (p.reg[0] & 0x0F) + 1;
+          if (p.envVol > 0) p.envVol--;
+          if (p.envVol === 0 && (p.reg[0] & 0x20)) p.envVol = 15;
+        }
+      }
+    }
+    function qTri(t) {
+      if (t.len > 0) t.len--;
+      if (t.reg[0] & 0x80) t.linear = t.reg[0] & 0x7F;
+      else if (t.linear > 0) t.linear--;
+    }
+    function qNoise(n) {
+      if (n.len > 0) n.len--;
+      if (n.reg[0] & 0x10) {
+        if (n.envDiv > 0) { n.envDiv--; }
+        else {
+          n.envDiv = (n.reg[0] & 0x0F) + 1;
+          if (n.envVol > 0) n.envVol--;
+          if (n.envVol === 0 && (n.reg[0] & 0x20)) n.envVol = 15;
+        }
+      }
+    }
+    function applyPulse(p, i, v) {
+      p.reg[i] = v;
+      if (i === 1) {
+        if (v & 0x80) { p.sweepDiv = ((v >> 4) & 7) + 1; p.muted = false; }
+      }
+      if (i === 2) p.freq = (p.freq & 0xFF00) | v;
+      if (i === 3) { p.freq = (p.freq & 0x00FF) | ((v & 7) << 8); p.len = LENGTH[(v >> 3) & 0x1F]; p.envDiv = 0; p.envVol = 15; p.muted = false; }
+    }
+    function dmcLoad(d) {
+      if (d.curAddr >= 0x8000) d.buf = readPrg(d.curAddr);
+      d.bitsLeft = 8; d.bufFull = true;
+      d.curAddr = ((d.curAddr + 1) & 0x3FFF) | 0xC000;
+      d.bytesLeft--;
+    }
+    function step1cycle(a) {
+      const p = a.p1;
+      if (p.len > 0) { p.freqCtr--; if (p.freqCtr <= 0) { p.freqCtr = p.freq; p.phase = (p.phase + 1) & 7; } }
+      const p2 = a.p2;
+      if (p2.len > 0) { p2.freqCtr--; if (p2.freqCtr <= 0) { p2.freqCtr = p2.freq; p2.phase = (p2.phase + 1) & 7; } }
+      const t = a.tri;
+      if (t.len > 0 && t.linear > 0) { t.freqCtr--; if (t.freqCtr <= 0) { t.freqCtr = t.freq; t.phase = (t.phase + 1) & 31; } }
+      const n = a.noise;
+      if (n.len > 0) {
+        n.freqCtr--;
+        if (n.freqCtr <= 0) {
+          n.freqCtr = n.freq;
+          const fb = (n.lfsr & 1) ^ ((n.lfsr >> 1) & 1);
+          n.lfsr = (n.lfsr >> 1) | (fb << ((n.reg[0] & 0x80) ? 6 : 14));
+        }
+      }
+      const d = a.dmc;
+      if (d.active && d.bitsLeft > 0) {
+        d.freqCtr--;
+        if (d.freqCtr <= 0) {
+          d.freqCtr = d.freq;
+          const bit = d.buf & 1;
+          d.buf >>= 1; d.bitsLeft--;
+          if (bit) { d.delta = Math.min(127, d.delta + 2); } else { d.delta = Math.max(0, d.delta - 2); }
+          if (d.bitsLeft === 0) {
+            if (d.bytesLeft > 0) dmcLoad(d);
+            else {
+              if (d.loop) { d.curAddr = d.startAddr; d.bytesLeft = d.startLen; dmcLoad(d); }
+              else {
+                d.active = false;
+                if (d.irqFlag) { d.irqLatched = true; cpu.irq = true; }
+              }
+            }
+          }
+        }
+      }
+    }
+    function pulseOutput(p) {
+      if (p.len === 0 || p.muted) return 0;
+      const duty = (p.reg[0] >> 6) & 3;
+      const on = DUTY[duty][p.phase];
+      if (!on) return 0;
+      const vol = (p.reg[0] & 0x10) ? p.envVol : (p.reg[0] & 0x0F);
+      return vol;
+    }
+    function mix() {
+      let s = 0;
+      s += pulseOutput(apu.p1);
+      s += pulseOutput(apu.p2);
+      const t = apu.tri;
+      if (t.len > 0 && t.linear > 0) {
+        const w = t.phase < 16 ? t.phase : 31 - t.phase;
+        s += w * 2;
+      }
+      const n = apu.noise;
+      if (n.len > 0) {
+        const vol = (n.reg[0] & 0x10) ? n.envVol : (n.reg[0] & 0x0F);
+        s += (n.lfsr & 1) ? vol : -vol;
+      }
+      const d = apu.dmc;
+      if (d.active) s += (d.delta - 64) * 2;
+      return s;
+    }
+    apu.generate = function (out, frames) {
+      const cps = CPU_CLOCK / SAMPLE_RATE;
+      let acc = 0;
+      for (let i = 0; i < frames; i++) {
+        acc += cps;
+        while (acc >= 1) { step1cycle(apu); acc -= 1; }
+        out[i] = Math.max(-1, Math.min(1, mix() * 0.03));
+      }
+    };
+
+    // ---- controllers
+    let padStates = [0, 0]; /* packed bits */
+    let padShift = [0, 0];
+    let strobe = false;
+    function packPad(port) {
+      let v = 0;
+      const q = sysPad[port];
+      if (q.A) v |= 1; if (q.B) v |= 2; if (q.sel) v |= 4; if (q.start) v |= 8;
+      if (q.up) v |= 16; if (q.down) v |= 32; if (q.left) v |= 64; if (q.right) v |= 128;
+      return v;
+    }
+    const sysPad = [
+      { A: 0, B: 0, sel: 0, start: 0, up: 0, down: 0, left: 0, right: 0 },
+      { A: 0, B: 0, sel: 0, start: 0, up: 0, down: 0, left: 0, right: 0 },
+    ];
+    const controllerRead = function (port) {
+      const p = port === 0 ? 0 : 1;
+      if (strobe) return padStates[p] & 1;
+      const v = padShift[p] & 1;
+      padShift[p] = (padShift[p] >> 1) | 0x8000;
+      return v & 0xFF;
+    };
+    const controllerWrite = function (v) {
+      strobe = (v & 1) === 1;
+      if (strobe) { padStates[0] = packPad(0); padStates[1] = packPad(1); padShift[0] = padStates[0]; padShift[1] = padStates[1]; }
+    };
+
+    // ------------------------------------------------------------ video
+    const video = {
+      pixels: new Uint8Array(256 * 240),
+    };
+    const bgPatOf = () => (ppu.ctrl & 0x10) ? 0x1000 : 0;
+    const spPatOf = () => (ppu.ctrl & 0x08) ? 0x1000 : 0;
+
+    function renderFrame() {
+      const px = video.pixels;
+      px.fill(ppu.vram[0x3F00] & 0x3F);
+      if (!rom) return;
+      const mask = ppu.mask;
+      if (!(mask & 0x18)) return; /* rendering disabled -> black */
+      const vram = ppu.vram;
+      const fineX0 = ppu.fineX, sx = ppu.scrollX, sy = ppu.scrollY;
+      const showBg = (mask & 0x08) !== 0;
+      const showSp = (mask & 0x10) !== 0;
+      const bgPat = bgPatOf(), spPat = spPatOf();
+      ppu.sp0HitFrame = false;
+
+      if (showBg) {
+        for (let y = 0; y < 240; y++) {
+          const vy = sy + y;
+          const ty = vy >> 3;
+          const fy = vy & 7;
+          const rowOff = ty & 31;
+          const vnt = (ty >> 5) & 1;
+          const rowBase = y * 256;
+          const attrRow = (rowOff >> 2) * 8;
+          const qySel = rowOff & 1;
+          for (let x = 0; x < 256; x++) {
+            const vx = sx + x;
+            const tx = vx >> 3;
+            const col = tx & 31;
+            const hnt = (tx >> 5) & 1;
+            const ntBase = 0x2000 + (((vnt * 2 + hnt) & 1) * 0x400);
+            const tAddr = ntBase + rowOff * 32 + col;
+            const tile = vram[tAddr];
+            const attr = vram[ntBase + 0x3C0 + attrRow + (col >> 2)];
+            const shift = ((col & 1) ? 2 : 0) | (qySel ? 4 : 0);
+            const pal = (attr >> shift) & 3;
+            const t0 = vram[bgPat + tile * 16 + fy];
+            const t1 = vram[bgPat + tile * 16 + 8 + fy];
+            const bit = 7 - (vx & 7);
+            const pv = ((t0 >> bit) & 1) | (((t1 >> bit) & 1) << 1);
+            let pidx;
+            if (pv === 0) pidx = vram[0x3F00] & 0x3F;
+            else pidx = vram[0x3F00 + (pal << 2) + pv] & 0x3F;
+            px[rowBase + x] = pidx;
+          }
+        }
+      }
+
+      if (showSp) {
+        const oam = ppu.oam;
+        const list = [];
+        for (let i = 0; i < 64; i++) {
+          const y = oam[i * 4];
+          if (y >= 0xEF) continue;
+          list.push({ i, y, x: oam[i * 4 + 3], tile: oam[i * 4 + 1], attr: oam[i * 4 + 2] });
+        }
+        list.sort((a, b) => (a.x - b.x) || (a.i - b.i));
+        for (const s of list) {
+          const palBase = (s.attr & 3) << 2;
+          const flipH = (s.attr & 0x40) !== 0;
+          const flipV = (s.attr & 0x80) !== 0;
+          const behind = (s.attr & 0x20) !== 0;
+          const backdrop = vram[0x3F00] & 0x3F;
+          for (let dy = 0; dy < 8; dy++) {
+            const syy = s.y + dy;
+            if (syy >= 240) continue;
+            const fy = flipV ? (7 - dy) : dy;
+            const tile = s.tile;
+            const t0 = vram[spPat + tile * 16 + fy];
+            const t1 = vram[spPat + tile * 16 + 8 + fy];
+            const row = syy * 256;
+            for (let dx = 0; dx < 8; dx++) {
+              const sxx = s.x + dx;
+              if (sxx < 0 || sxx >= 256) continue;
+              const bit = flipH ? dx : (7 - dx);
+              const pv = ((t0 >> bit) & 1) | (((t1 >> bit) & 1) << 1);
+              if (pv === 0) continue;
+              const cur = px[row + sxx];
+              if (behind && cur !== backdrop) continue;
+              const pidx = vram[0x3F00 + palBase + pv] & 0x3F;
+              px[row + sxx] = pidx;
+              if (s.i === 0 && cur !== backdrop) ppu.sp0HitFrame = true;
+            }
+          }
+        }
+      }
+      ppu.status = (ppu.status & ~0x40) | (ppu.sp0HitFrame ? 0x40 : 0);
+    }
+
+    // ------------------------------------------------------------ system
+    let audioActive = false;
+    let frameCount = 0;
+
+    const sys = {
+      cpu, ppu, apu, video, rom,
+      reset: function () {
+        ram.fill(0);
+        cpu.A = cpu.X = cpu.Y = 0; cpu.P = 0x24; cpu.SP = 0xFD; cpu.nmi = cpu.irq = false; cpu.halted = false;
+        cpu.PC = rom ? rom.vectors.reset : 0x8000;
+        ppu.ctrl = ppu.mask = ppu.status = 0; ppu.oamAddr = 0; ppu.w = 0; ppu.v = ppu.t = 0; ppu.fineX = 0; ppu.scrollX = ppu.scrollY = 0;
+        ppu.vram.fill(0);
+        if (rom) ppu.vram.set(rom.chr.subarray(0, 0x2000), 0);
+        ppu.vram[0x3F00] = 0x0F;
+        [p1, apu.p2, tri, noise, dmc].forEach(o => { for (const k in o) if (typeof o[k] === 'number') o[k] = 0; });
+        p1.envVol = p1.reg[0] & 0x0F; apu.p2.envVol = apu.p2.reg[0] & 0x0F; noise.envVol = noise.reg[0] & 0x0F;
+        p1.muted = apu.p2.muted = false; p1.sweepDiv = apu.p2.sweepDiv = 0;
+        noise.lfsr = 1;
+        apu.cycleSince = 0; frameCount = 0; apu.sweepTick = false;
+        ppu.enterVBlank();
+      },
+      setButton: function (port, name, down) {
+        const map = { A: 'A', B: 'B', sel: 'sel', sel: 'sel', start: 'start', up: 'up', down: 'down', left: 'left', right: 'right' };
+        if (map[name]) sysPad[port][map[name]] = down ? 1 : 0;
+      },
+      frame: function () {
+        if (cpu.halted) {
+          /* keep rendering the last frame so the page isn't blank */
+          if (frameCount++ % 2 === 0) renderFrame();
+          return;
+        }
+        cpu.cycles = 0; cpu.budget = CYCLES_PER_FRAME; cpu.fb = false; cpu.vblCleared = false;
+        ppu.enterVBlank();
+        cpu.exec();
+        renderFrame();
+        if (!audioActive || !opts.headless) apu.stepCycles(CYCLES_PER_FRAME);
+        frameCount++;
+      },
+      attachCanvas: function (canvas) {
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(256, 240);
+        sys.blit = function () {
+          const px = video.pixels, d = img.data;
+          for (let i = 0; i < 256 * 240; i++) {
+            const p = px[i] * 3;
+            d[i * 4] = PALETTE[p]; d[i * 4 + 1] = PALETTE[p + 1]; d[i * 4 + 2] = PALETTE[p + 2]; d[i * 4 + 3] = 255;
+          }
+          ctx.putImageData(img, 0, 0);
+        };
+        sys.blit();
+      },
+      blit: function () { /* no-op until attachCanvas */ },
+      startAudio: function () {
+        if (audioActive || typeof window === 'undefined' || !window.AudioContext) return;
+        try {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          const ctx = new AC();
+          const node = ctx.createScriptProcessor(4096, 0, 1);
+          const buf = new Float32Array(4096);
+          node.onaudioprocess = function (e) {
+            const out = e.outputBuffer.getChannelData(0);
+            apu.generate(buf, 4096);
+            out.set(buf);
+          };
+          node.connect(ctx.destination);
+          audioActive = true;
+          if (ctx.state === 'suspended') ctx.resume();
+        } catch (err) { msg('audio unavailable: ' + err.message); }
+      },
+      isHalted: function () { return cpu.halted; },
+      getFrameCount: function () { return frameCount; },
+    };
+
+    /* vblank + NMI origin */
+    ppu.enterVBlank = function () {
+      if (ppu.status & 0x80) return; /* already asserted */
+      ppu.status |= 0x80;
+      if (ppu.ctrl & 0x80) cpu.nmi = true;
+    };
+
+    function msg(s) { if (typeof console !== 'undefined' && console.log) console.log('[nes] ' + s); }
+
+    sys.reset();
+    cpu.exec = rom ? rom.buildExec(cpu) : null;
+    return sys;
+  }
+
+  g.NesRuntime = { createSystem, PALETTE, CYCLES_PER_FRAME, CPU_CLOCK, SAMPLE_RATE };
+  if (typeof module !== 'undefined' && module.exports) module.exports = g.NesRuntime;
+})(typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this));

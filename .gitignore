@@ -134,3 +134,7 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# ROM image files (copyrighted) — not committed to the repo
+roms/
+*.nes

@@ -1,0 +1,13 @@
+{
+  "name": "balloon-fight-nes2js",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Convert Balloon Fight .nes into web-playable JS code + resources (6502->JS transpilation)",
+  "scripts": {
+    "build": "node tools/nes2js.cjs public/game \"roms/Balloon Fight (USA).nes\"",
+    "build:here": "node tools/nes2js.cjs public/game",
+    "smoke": "node tools/smoke.cjs",
+    "serve": "npx serve public -l 8080"
+  },
+  "devDependencies": {}
+}
