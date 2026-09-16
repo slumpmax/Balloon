@@ -9,6 +9,7 @@
 npm install          # (ไม่มี dependency — ได้แค่ convenience)
 npm run build        # อ่าน ROM -> generate public/game/*.rom.js + resources + disasm + manifest
 npm run smoke        # ทดสอบ headless ใน Node รันเกมหลายร้อยเฟรม แล้ว dump เฟรมเป็น ASCII
+npm run export:sprites  # export ไทล์ CHR ทั้งหมดเป็น PNG sprite sheet (ดูหมายเหตุท้าย)
 npm run serve        # รัน web server ที่พอร์ต 8080 แล้วเปิด http://localhost:8080
 ```
 
@@ -23,6 +24,7 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 | `tools/opcodes.cjs` | ตาราง opcode 6502 (ทุกโหมด, cycle) |
 | `tools/nes2js.cjs` | parser iNES → scan code (reset/nmi/irq + linear ทั้ง ROM) → emit JS |
 | `tools/smoke.cjs` | เทสต์ headless + ASCII frame dump |
+| `tools/export-sprites.cjs` | export CHR tiles เป็น PNG sprite sheet + palette.json (PNG encoder ในตัว ไม่มี dependency) |
 | `public/nes-runtime.js` | runtime: CPU core, PPU (BG/sprites/palette/scroll/NMI), APU (pulse/noise/tri/dmc), input, headless |
 | `public/index.html` | หน้าเล่นเกม (canvas + keyboard + audio) |
 | `public/game/*.rom.js` | เอาต์พุตที่ Generate (16266 cases ของ `switch(R.PC)`) + PRG/CHR/vectors |
@@ -61,3 +63,17 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 - เสียง APU ทำงานทั้งเฟส gameplay (pulse + sweep/envelope, tri, noise) — ตรวจแบบ headless ผ่าน
 - ยังต้องทดสอบภาพ/เสียงใน browser จริงด้วยมือ (`npm run serve` + เปิด) — ความถูกต้องของ
   rendering/audio ยืนยันแบบ headless แล้วด้านล่างนี้
+
+## Export sprite
+
+`npm run export:sprites` อ่าน 8KB CHR จาก ROM แล้ว decode ทุก 256 ไทล์ (2 pattern table × 128)
+เป็น PNG ลง `public/game/sprites/` — ระบายสีด้วย palette กับพื้นจริงที่เกมโหลดเองลง PPU ระหว่างรัน:
+
+| ไฟล์ | ความหมาย |
+|---|---|
+| `*-table0-sprite.png` / `*-table1-sprite.png` | ไทล์ทั้ง 128 ตัว × 4 sub-palette ของ sprite palettes ($3F11-$3F1F) |
+| `*-table0-bg.png` / `*-table1-bg.png` | แบบเดียวกัน แต่ใช้ background palettes ($3F01-$3F0F) |
+| `palette.json` | รายการสี backdrop/bg/sprite ที่จับได้ตอน headless |
+
+Layout แต่ละไฟล์: แถวละ 16 ไทล์ สูง 8 ไทล์, แยกเป็น 4 บล็อกตาม sub-palette (0-3) — ไทล์
+สไปรต์จริง (บอลลูน, นักบิน ฯลฯ) ส่วนใหญ่อยู่ช่วงต้น table0 ครับ
