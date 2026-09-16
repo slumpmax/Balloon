@@ -34,6 +34,14 @@
     [0,0,0,0,1,1,1,1],
     [1,1,1,1,1,1,0,0]
   ];
+  /* triangle DAC wave: 32 steps, 4-bit output (0..15) */
+  const TRI_WAVE = [15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0,0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];
+  /* NES non-linear mixer (blargg / nesdev APU Mixer): two pulse channels share one pin */
+  const PULSE_TABLE = new Float64Array(31);
+  for (let n = 0; n < 31; n++) PULSE_TABLE[n] = 95.52 / (8128 / n + 100);
+  /* APU frame counter step lengths in CPU cycles (VibeNES-verified) */
+  const FC_STEP_4 = [7457, 7456, 7458, 7457];
+  const FC_STEP_5 = [7457, 7456, 7458, 7457, 7452];
 
   function createSystem(opts) {
     opts = opts || {};
@@ -68,20 +76,25 @@
     }
 
     // ---- APU state
-    const p1 = mkPulse(cpuWriteHandler());
-    function mkPulse(getCpu) {
-      return { reg: [0,0,0,0], len: 0, freq: 0, phase: 0, freqCtr: 0, envDiv: 0, envVol: 0, sweepDiv: 0, muted: false };
+    function mkPulse() {
+      return {
+        reg: [0,0,0,0], len: 0, freq: 0, phase: 0, freqCtr: 0,
+        envDiv: 0, envVol: 15, envStart: false,
+        sweepDiv: 0, sweepReload: false, muted: false,
+      };
     }
-    function cpuWriteHandler() { return function () {}; }
+    const p1 = mkPulse();
+    const p2 = mkPulse();
 
-    const tri = { reg: [0,0,0], len: 0, freq: 0, phase: 0, freqCtr: 0, linear: 0, linearReload: 0 };
-    const noise = { reg: [0,0,0], len: 0, freq: 0, freqCtr: 0, lfsr: 1, envDiv: 0, envVol: 0 };
+    const tri = { reg: [0,0,0], len: 0, freq: 0, phase: 0, freqCtr: 0, linear: 0, linearReload: false };
+    const noise = { reg: [0,0,0], len: 0, freq: 0, freqCtr: 0, lfsr: 1, envDiv: 0, envVol: 15, envStart: false };
     const dmc = {
       freq: 0, irqFlag: false, loop: false, delta: 0,
       startAddr: 0, startLen: 0, curAddr: 0, bytesLeft: 0,
       buf: 0, bitsLeft: 0, bufFull: false, active: false, freqCtr: 0,
       irqLatched: false,
     };
+    const fc = { count: 0, step: 0, mode5: false, irqInhibit: false, irqFlag: false };
 
     const readPrg = function (a) {
       a &= 0xFFFF;
@@ -130,7 +143,7 @@
         if (a === 0x4014) { ppu.oam.set(ram.subarray(v << 8, (v << 8) + 256)); cpu.cycles += 513; return; }
         if (a === 0x4015) { apu.writeEnable(v); return; }
         if (a === 0x4016) { controllerWrite(v); return; }
-        if (a === 0x4017) { return; } /* frame counter select: ignored */
+        if (a === 0x4017) { apu.writeFrameCounter(v); return; }
         if (a >= 0x4000 && a <= 0x4013) { apu.writeReg(a - 0x4000, v); return; }
       },
       r16: function (a) { return (this.r8(a)) | (this.r8(a + 1) << 8); },
@@ -148,6 +161,7 @@
         if (this.cycles >= this.budget) this.fb = true;
       },
       doInt: function () {
+        if (this.irq && !this.nmi && (this.P & 0x04)) return; /* 6502: IRQ masked while I=1 (NMI ignores I) */
         const vec = this.nmi ? rom.vectors.nmi : rom.vectors.irq;
         this.push16(this.PC & 0xFFFF);
         this.push8((this.P & 0xEF) | 0x20);
@@ -212,9 +226,7 @@
 
     // ---- APU register handlers
     const apu = {
-      p1, p2: mkPulse(cpuWriteHandler()), tri, noise, dmc,
-      cycleSince: 0,
-      sweepTick: false,
+      p1, p2, tri, noise, dmc, fc, dcX: 0, dcY: 0,
       readStatus: function () {
         let s = 0;
         if (this.p1.len > 0) s |= 1;
@@ -222,8 +234,10 @@
         if (this.tri.len > 0) s |= 4;
         if (this.noise.len > 0) s |= 8;
         if (this.dmc.active || this.dmc.bytesLeft > 0) s |= 16;
-        s |= this.dmc.irqLatched ? 0x40 : 0;
+        if (this.dmc.irqLatched) s |= 0x40;
         this.dmc.irqLatched = false;
+        if (this.fc.irqFlag) s |= 0x80;
+        this.fc.irqFlag = false;
         return s;
       },
       writeEnable: function (v) {
@@ -241,82 +255,140 @@
           dmcLoad(this);
         }
       },
+      writeFrameCounter: function (v) {
+        this.fc.mode5 = (v & 0x80) !== 0;
+        this.fc.irqInhibit = (v & 0x40) !== 0;
+        this.fc.count = 0;
+        this.fc.step = 0;
+        this.fc.irqFlag = false;
+        if (this.fc.mode5) {
+          quarterEvents(this);
+          halfEvents(this);
+        }
+      },
       writeReg: function (i, v) {
         v &= 0xFF;
         if (i <= 3) applyPulse(this.p1, i, v);
         else if (i <= 7) applyPulse(this.p2, i - 4, v);
-        else if (i === 8) { this.tri.reg[0] = v; }
+        else if (i === 8) { this.tri.reg[0] = v; this.tri.linearReload = true; }
         else if (i === 10) { this.tri.reg[1] = v; this.tri.freq = (this.tri.freq & 0xFF00) | v; }
-        else if (i === 11) { this.tri.reg[2] = v; this.tri.freq = (this.tri.freq & 0x00FF) | ((v & 7) << 8); this.tri.len = LENGTH[(v >> 3) & 0x1F]; }
-        else if (i === 12) { this.noise.reg[0] = v; }
+        else if (i === 11) { this.tri.reg[2] = v; this.tri.phase = 0; this.tri.freqCtr = 0; this.tri.freq = (this.tri.freq & 0x00FF) | ((v & 7) << 8); this.tri.len = LENGTH[(v >> 3) & 0x1F]; }
+        else if (i === 12) { this.noise.reg[0] = v; this.noise.envStart = true; }
         else if (i === 14) { this.noise.reg[1] = v; this.noise.freq = NOISE_PERIOD[v & 0x0F]; }
-        else if (i === 15) { this.noise.reg[2] = v; this.noise.len = LENGTH[(v >> 3) & 0x1F]; }
+        else if (i === 15) { this.noise.reg[2] = v; this.noise.len = LENGTH[(v >> 3) & 0x1F]; this.noise.envStart = true; }
         else if (i === 16) { this.dmc.freq = DMC_FREQ[v & 0x0F]; this.dmc.irqFlag = (v & 0x80) !== 0; this.dmc.loop = (v & 0x40) !== 0; }
         else if (i === 17) { this.dmc.delta = v & 0x7F; }
         else if (i === 18) { this.dmc.startAddr = 0xC000 + (v << 6); }
         else if (i === 19) { this.dmc.startLen = (v << 4) | 1; }
       },
       stepCycles: function (n) {
-        this.cycleSince += n;
-        const quarters = Math.floor(this.cycleSince / 7458);
-        if (quarters > 0) { this.cycleSince -= quarters * 7458; for (let q = 0; q < quarters; q++) this.quarter(); }
         while (n-- > 0) step1cycle(this);
       },
-      quarter: function () {
-        qPulse(this.p1);
-        qPulse(this.p2);
-        qTri(this.tri);
-        qNoise(this.noise);
-        this.sweepTick = !this.sweepTick;
-        if (this.sweepTick) { sweepPulse(this.p1, true); sweepPulse(this.p2, false); }
+      generate: function (out, frames) {
+        const cps = CPU_CLOCK / SAMPLE_RATE;
+        let acc = 0, xLast = this.dcX, yLast = this.dcY;
+        for (let i = 0; i < frames; i++) {
+          acc += cps;
+          while (acc >= 1) { step1cycle(this); acc -= 1; }
+          const x = mix() * 0.9;
+          const y = x - xLast + 0.998 * yLast; /* DC blocker */
+          xLast = x; yLast = y;
+          out[i] = y > 1 ? 1 : (y < -1 ? -1 : y);
+        }
+        this.dcX = xLast; this.dcY = yLast;
       },
     };
-    function sweepPulse(p, isP1) {
-      const reg = p.reg[1];
-      if (!(reg & 0x80)) return;
-      if (p.sweepDiv > 0) { p.sweepDiv--; return; }
-      p.sweepDiv = ((reg >> 4) & 7) + 1;
-      const amt = p.freq >> (reg & 7);
-      let target;
-      if (reg & 0x08) target = p.freq - amt - (isP1 ? 1 : 0);
-      else target = p.freq + amt;
-      if (target < 8 || target > 0x7FF) p.muted = true;
-      else p.freq = target;
+
+    /* quarter frame: envelopes + triangle linear counter */
+    function quarterEvents(a) {
+      clockEnvelope(a.p1);
+      clockEnvelope(a.p2);
+      clockLinear(a.tri);
+      clockEnvelope(a.noise);
     }
-    function qPulse(p) {
-      if (p.len > 0) p.len--;
-      if (p.reg[0] & 0x10) {
-        if (p.envDiv > 0) { p.envDiv--; }
-        else {
-          p.envDiv = (p.reg[0] & 0x0F) + 1;
-          if (p.envVol > 0) p.envVol--;
-          if (p.envVol === 0 && (p.reg[0] & 0x20)) p.envVol = 15;
+    /* half frame: length counters + sweep units */
+    function halfEvents(a) {
+      clockLength(a.p1);
+      clockLength(a.p2);
+      clockTriLength(a.tri);
+      clockLength(a.noise);
+      clockSweep(a.p1);
+      clockSweep(a.p2);
+    }
+    /* frame counter ($4017): fires quarter/half frame clocks from the real step table */
+    function fcClock(a) {
+      const f = a.fc;
+      f.count++;
+      const target = f.mode5 ? FC_STEP_5[f.step] : FC_STEP_4[f.step];
+      if (f.count < target) return;
+      f.count = 0;
+      if (f.mode5) {
+        if (f.step !== 3) quarterEvents(a);
+        if (f.step === 1 || f.step === 4) halfEvents(a);
+      } else {
+        quarterEvents(a);
+        if (f.step === 1 || f.step === 3) {
+          halfEvents(a);
+          if (f.step === 3 && !f.irqInhibit) { f.irqFlag = true; cpu.irq = true; }
         }
       }
+      f.step = (f.step + 1) % (f.mode5 ? 5 : 4);
     }
-    function qTri(t) {
-      if (t.len > 0) t.len--;
-      if (t.reg[0] & 0x80) t.linear = t.reg[0] & 0x7F;
-      else if (t.linear > 0) t.linear--;
+    /* envelope: clocked on quarter frame */
+    function clockEnvelope(p) {
+      if (p.envStart) {
+        p.envStart = false;
+        p.envVol = 15;
+        p.envDiv = p.reg[0] & 0x0F;
+      } else if (p.envDiv === 0) {
+        p.envDiv = p.reg[0] & 0x0F;
+        if (p.envVol === 0) { if (p.reg[0] & 0x20) p.envVol = 15; }
+        else p.envVol--;
+      } else p.envDiv--;
     }
-    function qNoise(n) {
-      if (n.len > 0) n.len--;
-      if (n.reg[0] & 0x10) {
-        if (n.envDiv > 0) { n.envDiv--; }
-        else {
-          n.envDiv = (n.reg[0] & 0x0F) + 1;
-          if (n.envVol > 0) n.envVol--;
-          if (n.envVol === 0 && (n.reg[0] & 0x20)) n.envVol = 15;
+    /* length counter: clocked on half frame; frozen while loop/hold flag is set */
+    function clockLength(p) {
+      if (!(p.reg[0] & 0x20) && p.len > 0) p.len--;
+    }
+    function clockTriLength(t) {
+      if (!(t.reg[0] & 0x80) && t.len > 0) t.len--;
+    }
+    /* triangle linear counter: clocked on quarter frame */
+    function clockLinear(t) {
+      if (t.linearReload) {
+        t.linear = t.reg[0] & 0x7F;
+        t.linearReload = false;
+      } else if (t.linear > 0) t.linear--;
+    }
+    /* pulse sweep unit: clocked on half frame */
+    function clockSweep(p) {
+      const reg = p.reg[1];
+      if (reg & 0x80) {
+        if (p.sweepDiv === 0 && !p.sweepReload) {
+          const amt = p.freq >> (reg & 7);
+          const target = (reg & 0x08) ? (p.freq - amt - 1) : (p.freq + amt);
+          if (target < 8 || target > 0x7FF) p.muted = true;
+          else p.freq = target;
         }
+        if (p.sweepDiv === 0 || p.sweepReload) {
+          p.sweepDiv = ((reg >> 4) & 7) + 1;
+          p.sweepReload = false;
+        } else p.sweepDiv--;
+      } else {
+        p.sweepReload = false;
       }
     }
     function applyPulse(p, i, v) {
       p.reg[i] = v;
-      if (i === 1) {
-        if (v & 0x80) { p.sweepDiv = ((v >> 4) & 7) + 1; p.muted = false; }
+      if (i === 0) p.envStart = true;
+      if (i === 1) p.sweepReload = true;
+      if (i === 2) { p.freq = (p.freq & 0xFF00) | v; p.muted = false; }
+      if (i === 3) {
+        p.freq = (p.freq & 0x00FF) | ((v & 7) << 8);
+        p.len = LENGTH[(v >> 3) & 0x1F];
+        p.phase = 0; p.freqCtr = 0;
+        p.envStart = true; p.muted = false;
       }
-      if (i === 2) p.freq = (p.freq & 0xFF00) | v;
-      if (i === 3) { p.freq = (p.freq & 0x00FF) | ((v & 7) << 8); p.len = LENGTH[(v >> 3) & 0x1F]; p.envDiv = 0; p.envVol = 15; p.muted = false; }
     }
     function dmcLoad(d) {
       if (d.curAddr >= 0x8000) d.buf = readPrg(d.curAddr);
@@ -325,6 +397,7 @@
       d.bytesLeft--;
     }
     function step1cycle(a) {
+      fcClock(a);
       const p = a.p1;
       if (p.len > 0) { p.freqCtr--; if (p.freqCtr <= 0) { p.freqCtr = p.freq; p.phase = (p.phase + 1) & 7; } }
       const p2 = a.p2;
@@ -361,41 +434,40 @@
         }
       }
     }
-    function pulseOutput(p) {
-      if (p.len === 0 || p.muted) return 0;
-      const duty = (p.reg[0] >> 6) & 3;
-      const on = DUTY[duty][p.phase];
-      if (!on) return 0;
-      const vol = (p.reg[0] & 0x10) ? p.envVol : (p.reg[0] & 0x0F);
-      return vol;
+    function apuReset() {
+      [p1, p2, tri, noise, dmc].forEach(o => { for (const k in o) if (typeof o[k] === 'number') o[k] = 0; });
+      p1.envStart = p2.envStart = noise.envStart = false;
+      p1.sweepReload = p2.sweepReload = false;
+      p1.muted = p2.muted = false;
+      tri.linearReload = false;
+      dmc.bufFull = false;
+      p1.envVol = p2.envVol = noise.envVol = 15;
+      noise.lfsr = 1;
+      fc.count = 0; fc.step = 0; fc.mode5 = false; fc.irqInhibit = false; fc.irqFlag = false;
+      const a = apu; a.dcX = 0; a.dcY = 0;
     }
+    /* pulse output level (0..15); silenced by length counter, sweep overflow, low timer or duty off */
+    function pulseVol(p) {
+      if (p.len === 0 || p.muted || p.freq < 8) return 0;
+      const duty = (p.reg[0] >> 6) & 3;
+      if (!DUTY[duty][p.phase]) return 0;
+      return (p.reg[0] & 0x10) ? (p.reg[0] & 0x0F) : p.envVol;
+    }
+    /* non-linear NES mixer: pulse pin + tnd pin (nesdev APU Mixer) */
     function mix() {
-      let s = 0;
-      s += pulseOutput(apu.p1);
-      s += pulseOutput(apu.p2);
+      let s = PULSE_TABLE[pulseVol(apu.p1) + pulseVol(apu.p2)];
+      let tnd = 0;
       const t = apu.tri;
-      if (t.len > 0 && t.linear > 0) {
-        const w = t.phase < 16 ? t.phase : 31 - t.phase;
-        s += w * 2;
-      }
+      if (t.len > 0 && t.linear > 0) tnd += TRI_WAVE[t.phase] / 8227;
       const n = apu.noise;
       if (n.len > 0) {
-        const vol = (n.reg[0] & 0x10) ? n.envVol : (n.reg[0] & 0x0F);
-        s += (n.lfsr & 1) ? vol : -vol;
+        const nv = (n.reg[0] & 0x10) ? (n.reg[0] & 0x0F) : n.envVol;
+        tnd += (n.lfsr & 1 ? 0 : nv) / 12241;
       }
-      const d = apu.dmc;
-      if (d.active) s += (d.delta - 64) * 2;
+      tnd += apu.dmc.delta / 22638;
+      s += 159.79 / ((1 / tnd) + 100);
       return s;
     }
-    apu.generate = function (out, frames) {
-      const cps = CPU_CLOCK / SAMPLE_RATE;
-      let acc = 0;
-      for (let i = 0; i < frames; i++) {
-        acc += cps;
-        while (acc >= 1) { step1cycle(apu); acc -= 1; }
-        out[i] = Math.max(-1, Math.min(1, mix() * 0.03));
-      }
-    };
 
     // ---- controllers
     let padStates = [0, 0]; /* packed bits */
@@ -532,11 +604,8 @@
         ppu.vram.fill(0);
         if (rom) ppu.vram.set(rom.chr.subarray(0, 0x2000), 0);
         ppu.vram[0x3F00] = 0x0F;
-        [p1, apu.p2, tri, noise, dmc].forEach(o => { for (const k in o) if (typeof o[k] === 'number') o[k] = 0; });
-        p1.envVol = p1.reg[0] & 0x0F; apu.p2.envVol = apu.p2.reg[0] & 0x0F; noise.envVol = noise.reg[0] & 0x0F;
-        p1.muted = apu.p2.muted = false; p1.sweepDiv = apu.p2.sweepDiv = 0;
-        noise.lfsr = 1;
-        apu.cycleSince = 0; frameCount = 0; apu.sweepTick = false;
+        apuReset();
+        frameCount = 0;
         ppu.enterVBlank();
       },
       setButton: function (port, name, down) {
@@ -553,7 +622,7 @@
         ppu.enterVBlank();
         cpu.exec();
         renderFrame();
-        if (!audioActive || !opts.headless) apu.stepCycles(CYCLES_PER_FRAME);
+        if (!audioActive || opts.headless) apu.stepCycles(CYCLES_PER_FRAME);
         frameCount++;
       },
       attachCanvas: function (canvas) {

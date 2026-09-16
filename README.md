@@ -39,8 +39,11 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 
 ## หมายเหตุ / ข้อจำกัด
 
-- ระบบเสียงเป็น approximation เช่นกัน แต่ครบ pulse 2 ช่องพร้อม **sweep unit + envelope** ตามสเปก NES,
-  triangle (linear counter), noise (LFSR), DMC พื้นฐาน — melody/SFX หลักของเกมเล่นถูกต้อง
+- ระบบเสียง implement ตาม APU จริง NES (ความถี่/ระยะเวลาตรง VibeNES): pulse 2 ช่องพร้อม **sweep unit +
+  envelope + length counter** ตามสเปก, triangle (linear counter + length), noise (LFSR bit-0 โมด),
+  DMC พื้นฐาน; **frame counter ($4017)** โหมด 4/5-step จากตารางช่วงจังหวะจริง, **mixer แบบ
+  non-linear** (pulse/tnd ของ nesdev APU Mixer) + DC blocker — melody/SFX หลักของเกมเล่นถูกต้อง
+  และเกมเขียน `$4017=$C0` (5-step, IRQ inhibit) เป็นโหมดเดียวที่เกมใช้จริง
 - ไม่ลอง emulator ใดๆ — CPU ทำงานด้วยโค้ด JS ที่ transpile ตรงจาก bytecode เกม
 - ใช้ palette **Firebrandx 2C02** (มาตรฐาน Mesen/FCEUX) และสีพื้นจาก `$3F00` ตอน rendering-off
   เพื่อให้สีตรงต้นฉบับ (สลับได้ถ้าอยากลอง palette แบบอื่นใน `public/nes-runtime.js`)
