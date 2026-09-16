@@ -13,7 +13,8 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 ```
 
 คีย์บอร์ดในหน้าเว็บ: ลูกศร = เลื่อน/ลอย · `Z` = B (เป่าลูกโป่ง) · `X` = A (เตะ) · `Enter` = Start ·
-`Shift` = Select · `P` = หยุด · `R` = restart · `M` = เปิด/ปิดเสียง
+`Shift` = Select · ผู้เล่น 2: `WASD` = เลื่อน/ลอย · `F` = B · `G` = A · `C` = Start · `V` = Select ·
+`P` = หยุด · `R` = restart · `M` = เปิด/ปิดเสียง
 
 ## โครงสร้าง
 

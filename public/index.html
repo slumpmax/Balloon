@@ -30,6 +30,10 @@
     <div><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> เลื่อน / ลอย</div>
     <div><kbd>Z</kbd> = B (เป่าลูกโป่ง) &nbsp; <kbd>X</kbd> = A (เตะ)</div>
     <div><kbd>Enter</kbd> = Start &nbsp; <kbd>Shift</kbd> = Select</div>
+    <h2>ผู้เล่น 2</h2>
+    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> เลื่อน / ลอย</div>
+    <div><kbd>F</kbd> = B (เป่าลูกโป่ง) &nbsp; <kbd>G</kbd> = A (เตะ)</div>
+    <div><kbd>C</kbd> = Start &nbsp; <kbd>V</kbd> = Select</div>
     <div><kbd>P</kbd> หยุด/เล่นต่อ &nbsp; <kbd>R</kbd> restart &nbsp; <kbd>M</kbd> เปิด/ปิดเสียง</div>
     <h2>สถานะ</h2>
     <div id="status">กำลังโหลด...</div>
@@ -57,25 +61,25 @@
     ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
     z: 'B', x: 'A', Enter: 'start', Shift: 'sel'
   };
+  var K2 = {
+    w: 'up', a: 'left', s: 'down', d: 'right',
+    f: 'B', g: 'A', c: 'start', v: 'sel'
+  };
+  var MAP = {};
+  for (var pk in K) MAP[pk] = [0, K[pk]];
+  for (var pk2 in K2) MAP[pk2] = [1, K2[pk2]];
   var pressed = {};
   function apply() {
-    sys.setButton(0, 'left', !!pressed.ArrowLeft);
-    sys.setButton(0, 'right', !!pressed.ArrowRight);
-    sys.setButton(0, 'up', !!pressed.ArrowUp);
-    sys.setButton(0, 'down', !!pressed.ArrowDown);
-    sys.setButton(0, 'B', !!pressed.z);
-    sys.setButton(0, 'A', !!pressed.x);
-    sys.setButton(0, 'start', !!pressed.Enter);
-    sys.setButton(0, 'sel', !!pressed.Shift);
+    for (var k in MAP) sys.setButton(MAP[k][0], MAP[k][1], !!pressed[k]);
   }
   window.addEventListener('keydown', function (e) {
     if (e.key === 'p' || e.key === 'P') { running = !running; return; }
     if (e.key === 'r' || e.key === 'R') { sys.reset(); return; }
     if (e.key === 'm' || e.key === 'M') { sound = !sound; if (sound) sys.startAudio(); return; }
-    if (K[e.key] !== undefined) { e.preventDefault(); pressed[e.key] = true; apply(); }
+    if (MAP[e.key] !== undefined) { e.preventDefault(); pressed[e.key] = true; apply(); }
   });
   window.addEventListener('keyup', function (e) {
-    if (K[e.key] !== undefined) { pressed[e.key] = false; apply(); }
+    if (MAP[e.key] !== undefined) { pressed[e.key] = false; apply(); }
   });
 
   var last = performance.now(), frames = 0, fps = 0;
