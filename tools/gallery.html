@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>HD Export Gallery — Balloon Fight</title>
+<style>
+  body { background:#16161d; color:#d7d7e0; font-family:ui-monospace,monospace; margin:0; padding:20px; }
+  h1 { font-size:16px; } h1 small{color:#8a8aa0;font-weight:normal;}
+  h2 { font-size:13px; color:#8ad08a; text-transform:uppercase; letter-spacing:1px; margin:22px 0 8px; }
+  .grid { display:flex; flex-wrap:wrap; gap:14px; }
+  figure { margin:0; }
+  img { border:2px solid #2a2a36; background:#000; }
+  .scene img { width:512px; height:480px; image-rendering:auto; }
+  .cut img { width:128px; height:192px; image-rendering:pixelated; background:
+    repeating-conic-gradient(#22222c 0% 25%, #191922 0% 50%) 0 0/24px 24px; }
+  figcaption { font-size:11px; color:#8a8aa0; margin-top:4px; max-width:512px; }
+  .note { color:#8a8aa0; font-size:12px; margin:4px 0 12px; }
+</style>
+</head>
+<body>
+<h1>HD Export Gallery <small>— ตรวจภาพด้วยตา (dev only)</small></h1>
+
+<h2>ฉาก 1024×960 (Scale2x 4x)</h2>
+<div class="grid scene">
+  <figure><img src="../public/game/hd/screenshots/title.png"><figcaption>title.png</figcaption></figure>
+  <figure><img src="../public/game/hd/screenshots/gameplay-1p.png"><figcaption>gameplay-1p.png</figcaption></figure>
+  <figure><img src="../public/game/hd/screenshots/gameplay-2p.png"><figcaption>gameplay-2p.png</figcaption></figure>
+  <figure><img src="../public/game/hd/screenshots/balloon-trip.png"><figcaption>balloon-trip.png</figcaption></figure>
+</div>
+
+<h2>Attract demo GIF (512×480, 259 เฟรม)</h2>
+<p class="note">ควรเห็น title → demo เกมเล่นเองเป็นรอบ</p>
+<img src="../public/game/hd/screenshots/attract-demo.gif" width="512" height="480">
+
+<h2>ตัวละคร (โปร่งใส 64×96 ต่อ pose, sheet รวม)</h2>
+<p class="note">พื้นหลังลายตาราง = โปร่งใสจริง</p>
+<div class="grid cut">
+  <figure><img src="../public/game/hd/sprites/player1-sheet.png" style="width:512px;height:384px"><figcaption>player1-sheet.png (26 poses)</figcaption></figure>
+  <figure><img src="../public/game/hd/sprites/player2-sheet.png" style="width:512px;height:192px"><figcaption>player2-sheet.png (10 poses)</figcaption></figure>
+  <figure><img src="../public/game/hd/sprites/enemy-sheet.png" style="width:512px;height:384px"><figcaption>enemy-sheet.png (26 poses)</figcaption></figure>
+</div>
+</body>
+</html>

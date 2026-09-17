@@ -8,6 +8,7 @@
     "build:here": "node tools/nes2js.cjs public/game",
     "smoke": "node tools/smoke.cjs",
     "export:sprites": "node tools/export-sprites.cjs",
+    "export:hd": "node tools/export-hd.cjs",
     "serve": "npx serve public -l 8080"
   },
   "devDependencies": {}

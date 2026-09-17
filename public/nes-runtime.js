@@ -43,6 +43,27 @@
   const FC_STEP_4 = [7457, 7456, 7458, 7457];
   const FC_STEP_5 = [7457, 7456, 7458, 7457, 7452];
 
+  /* Scale2x (AdvanceMAME) บน palette-index pixels — ใช้ทั้งหน้าเว็บ (real-time)
+   * และ tools/export-hd.cjs (offline) เพื่อให้ผลลัพธ์เหมือนกันเป๊ะ
+   * out: Uint8Array ขนาด (w*2)*(h*2) ที่ผู้เรียกเตรียมไว้ (zero-alloc ต่อเฟรม) */
+  function scale2xIndexInto(px, w, h, out) {
+    const W = w * 2;
+    for (let y = 0; y < h; y++) {
+      const yUp = y > 0 ? y - 1 : 0, yDn = y < h - 1 ? y + 1 : h - 1;
+      const r0 = (y * 2) * W, r1 = r0 + W;
+      const rowU = yUp * w, rowM = y * w, rowD = yDn * w;
+      for (let x = 0; x < w; x++) {
+        const xL = x > 0 ? x - 1 : 0, xR = x < w - 1 ? x + 1 : w - 1;
+        const B = px[rowU + x], D = px[rowM + xL], E = px[rowM + x], F = px[rowM + xR], H = px[rowD + x];
+        const c = x * 2;
+        out[r0 + c]     = (D === B && B !== F && D !== H) ? D : E;
+        out[r0 + c + 1] = (B === F && B !== D && F !== H) ? F : E;
+        out[r1 + c]     = (D === H && D !== B && H !== F) ? D : E;
+        out[r1 + c + 1] = (F === H && F !== B && H !== D) ? F : E;
+      }
+    }
+  }
+
   function createSystem(opts) {
     opts = opts || {};
     const rom = opts.rom;
@@ -525,7 +546,6 @@
           const vnt = (ty >> 5) & 1;
           const rowBase = y * 256;
           const attrRow = (rowOff >> 2) * 8;
-          const qySel = rowOff & 1;
           for (let x = 0; x < 256; x++) {
             const vx = sx + x;
             const tx = vx >> 3;
@@ -535,7 +555,9 @@
             const tAddr = ntBase + rowOff * 32 + col;
             const tile = vram[tAddr];
             const attr = vram[ntBase + 0x3C0 + attrRow + (col >> 2)];
-            const shift = ((col & 1) ? 2 : 0) | (qySel ? 4 : 0);
+            /* สเปก NES: attribute byte แบ่งเป็น 4 quadrant (2x2 tiles) —
+               shift = 0/2 (คอลัมน์คู่/คี่ของ quadrant) + 0/4 (แถวคู่/คี่ของ quadrant) */
+            const shift = ((col & 2) ? 2 : 0) | ((rowOff & 2) ? 4 : 0);
             const pal = (attr >> shift) & 3;
             const t0 = vram[bgPat + tile * 16 + fy];
             const t1 = vram[bgPat + tile * 16 + 8 + fy];
@@ -580,7 +602,8 @@
               if (pv === 0) continue;
               const cur = px[row + sxx];
               if (behind && cur !== backdrop) continue;
-              const pidx = vram[0x3F00 + palBase + pv] & 0x3F;
+              /* สไปรต์ใช้ชุดพาเลต $3F10-$3F1F (hardware sprite palettes) ไม่ใช่ชุด BG */
+              const pidx = vram[0x3F10 + palBase + pv] & 0x3F;
               px[row + sxx] = pidx;
               if (s.i === 0 && cur !== backdrop) ppu.sp0HitFrame = true;
             }
@@ -593,6 +616,7 @@
     // ------------------------------------------------------------ system
     let audioActive = false;
     let frameCount = 0;
+    let blitScratch2 = null, blitScratch4 = null;
 
     const sys = {
       cpu, ppu, apu, video, rom,
@@ -629,16 +653,38 @@
         const ctx = canvas.getContext('2d');
         const img = ctx.createImageData(256, 240);
         sys.blit = function () {
-          const px = video.pixels, d = img.data;
-          for (let i = 0; i < 256 * 240; i++) {
-            const p = px[i] * 3;
-            d[i * 4] = PALETTE[p]; d[i * 4 + 1] = PALETTE[p + 1]; d[i * 4 + 2] = PALETTE[p + 2]; d[i * 4 + 3] = 255;
-          }
+          sys.blitTo(img);
           ctx.putImageData(img, 0, 0);
         };
         sys.blit();
       },
       blit: function () { /* no-op until attachCanvas */ },
+      /* เขียนเฟรม 256x240 เป็น RGBA ลง ImageData ที่ผู้เรียกสร้างไว้ (ไม่ putImageData เอง) */
+      blitTo: function (img) {
+        const px = video.pixels, d = img.data;
+        for (let i = 0; i < 256 * 240; i++) {
+          const p = px[i] * 3;
+          d[i * 4] = PALETTE[p]; d[i * 4 + 1] = PALETTE[p + 1]; d[i * 4 + 2] = PALETTE[p + 2]; d[i * 4 + 3] = 255;
+        }
+      },
+      /* Scale2x เรียลไทม์: times = 2 หรือ 4 — ขยายในโดเมน index ก่อนแปลงสี
+       * img: ImageData ขนาด (256*times)x(240*times), scratch: buffer ภายในใช้ซ้ำ */
+      blitScale2x: function (img, times) {
+        times = times || 2;
+        if (!blitScratch2) blitScratch2 = new Uint8Array(512 * 480);
+        scale2xIndexInto(video.pixels, 256, 240, blitScratch2);
+        let src = blitScratch2, n = 512 * 480;
+        if (times === 4) {
+          if (!blitScratch4) blitScratch4 = new Uint8Array(1024 * 960);
+          scale2xIndexInto(blitScratch2, 512, 480, blitScratch4);
+          src = blitScratch4; n = 1024 * 960;
+        }
+        const d = img.data;
+        for (let i = 0; i < n; i++) {
+          const p = src[i] * 3, o = i * 4;
+          d[o] = PALETTE[p]; d[o + 1] = PALETTE[p + 1]; d[o + 2] = PALETTE[p + 2]; d[o + 3] = 255;
+        }
+      },
       startAudio: function () {
         if (audioActive || typeof window === 'undefined' || !window.AudioContext) return;
         try {
@@ -674,6 +720,6 @@
     return sys;
   }
 
-  g.NesRuntime = { createSystem, PALETTE, CYCLES_PER_FRAME, CPU_CLOCK, SAMPLE_RATE };
+  g.NesRuntime = { createSystem, PALETTE, scale2xIndexInto, CYCLES_PER_FRAME, CPU_CLOCK, SAMPLE_RATE };
   if (typeof module !== 'undefined' && module.exports) module.exports = g.NesRuntime;
 })(typeof globalThis !== 'undefined' ? globalThis : (typeof window !== 'undefined' ? window : this));
