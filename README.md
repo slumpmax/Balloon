@@ -10,12 +10,19 @@ npm install          # (ไม่มี dependency — ได้แค่ conven
 npm run build        # อ่าน ROM -> generate public/game/*.rom.js + resources + disasm + manifest
 npm run smoke        # ทดสอบ headless ใน Node รันเกมหลายร้อยเฟรม แล้ว dump เฟรมเป็น ASCII
 npm run export:sprites  # export ไทล์ CHR ทั้งหมดเป็น PNG sprite sheet (ดูหมายเหตุท้าย)
+npm run export:hd      # ส่งออกฉาก + ตัวละครเป็นภาพ HD 1024x960 (Scale2x) + GIF attract demo
 npm run serve        # รัน web server ที่พอร์ต 8080 แล้วเปิด http://localhost:8080
 ```
 
 คีย์บอร์ดในหน้าเว็บ: ลูกศร = เลื่อน/ลอย · `Z` = B (เป่าลูกโป่ง) · `X` = A (เตะ) · `Enter` = Start ·
 `Shift` = Select · ผู้เล่น 2: `WASD` = เลื่อน/ลอย · `F` = B · `G` = A · `C` = Start · `V` = Select ·
-`P` = หยุด · `R` = restart · `M` = เปิด/ปิดเสียง
+`P` = หยุด · `R` = restart · `M` = เปิด/ปิดเสียง · `H` = สลับความละเอียด 1x / HD 2x / HD 4x
+
+### เล่นแบบ HD (เรียลไทม์)
+
+หน้าเว็บเรนเดอร์ด้วย **Scale2x ในโดเมน palette-index แบบเรียลไทม์** (โค้ดเดียวกับ exporter) —
+ค่าเริ่มต้น **HD 4x (1024×960)** สลับเป็น 1x / HD 2x ได้จากปุ่มเหนือ canvas หรือกด `H`
+ทำงานที่ 60fps เพราะใช้ scratch buffer ใช้ซ้ำ (zero-alloc ต่อเฟรม)
 
 ## โครงสร้าง
 
@@ -24,7 +31,11 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 | `tools/opcodes.cjs` | ตาราง opcode 6502 (ทุกโหมด, cycle) |
 | `tools/nes2js.cjs` | parser iNES → scan code (reset/nmi/irq + linear ทั้ง ROM) → emit JS |
 | `tools/smoke.cjs` | เทสต์ headless + ASCII frame dump |
-| `tools/export-sprites.cjs` | export CHR tiles เป็น PNG sprite sheet + palette.json (PNG encoder ในตัว ไม่มี dependency) |
+| `tools/png.cjs` | PNG encoder (RGBA) ใช้ร่วมทุก exporter — ไม่มี dependency |
+| `tools/gif.cjs` | GIF89a + LZW encoder/decoder (มี round-trip self-test) |
+| `tools/scaler.cjs` | Scale2x (AdvanceMAME) บน palette-index + nearest-neighbor บน RGBA |
+| `tools/export-sprites.cjs` | export CHR tiles เป็น PNG sprite sheet + palette.json |
+| `tools/export-hd.cjs` | ขับเกม headless → ฉาก HD 1024×960 + ตัวละครโปร่งใส + GIF attract demo |
 | `public/nes-runtime.js` | runtime: CPU core, PPU (BG/sprites/palette/scroll/NMI), APU (pulse/noise/tri/dmc), input, headless |
 | `public/index.html` | หน้าเล่นเกม (canvas + keyboard + audio) |
 | `public/game/*.rom.js` | เอาต์พุตที่ Generate (16266 cases ของ `switch(R.PC)`) + PRG/CHR/vectors |
@@ -63,6 +74,26 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 - เสียง APU ทำงานทั้งเฟส gameplay (pulse + sweep/envelope, tri, noise) — ตรวจแบบ headless ผ่าน
 - ยังต้องทดสอบภาพ/เสียงใน browser จริงด้วยมือ (`npm run serve` + เปิด) — ความถูกต้องของ
   rendering/audio ยืนยันแบบ headless แล้วด้านล่างนี้
+
+## Export HD (ฉาก + ตัวละคร)
+
+`npm run export:hd` ขับเกม headless ผ่านทุกฉาก (input จำลองผ่านตัวควบคุม) แล้วจับเฟรมจาก PPU ขยาย
+ด้วย **Scale2x สองรอบ (4x → 1024×960)** ในโดเมน palette-index ก่อนแปลงเป็นสี — คมกริบระดับพิกเซล
+ตัวละครตัดจาก OAM (composite 16×24 = 6 sprites) เป็น PNG โปร่งใสแยก pose ที่เกมวาดจริง ทั้งหมดเขียนด้วย
+encoder PNG/GIF ในตัว (`tools/png.cjs`, `tools/gif.cjs` + round-trip LZW) ไม่เพิ่ม dependency
+
+ผลลัพธ์ใน `public/game/hd/`:
+
+| ไฟล์ | ความหมาย |
+|---|---|
+| `screenshots/title.png` | หน้า title "Balloon Fight" (1024×960) |
+| `screenshots/gameplay-1p.png` | ฉากเล่น 1 คน (ผู้เล่นยืนบนแพลตฟอร์ม + HUD) |
+| `screenshots/gameplay-2p.png` | ฉาก 2 คน (ผู้เล่น 2 กด Start เข้าร่วม) |
+| `screenshots/balloon-trip.png` | โหมด Balloon Trip (Select ×2 → Start) |
+| `screenshots/attract-demo.gif` | อนิเมชัน attract demo 512×480, ~20fps, วนลูป |
+| `sprites/player1-*.png` / `player2-*.png` | ตัวละครผู้เล่นแยก pose (64×96 ต่อ pose, โปร่งใส) + sheet รวม |
+| `sprites/enemy-*.png` | ศัตรู/ฝูงบนแพลตฟอร์มแยก pose + sheet รวม |
+| `manifest.json` | รายการไฟล์ + OAM tiles ของแต่ละ pose |
 
 ## Export sprite
 
