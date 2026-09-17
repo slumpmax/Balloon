@@ -7,10 +7,10 @@ const fs = require('fs');
 
 const GAME_DIR = path.join(__dirname, '..', 'public', 'game');
 /* เลือกเกม: node tools/smoke.cjs [frames] [game-id] — เช่น smoke.cjs 180 nuts-milk-japan */
-const gameId = process.argv[3];
-let romFile = gameId ? gameId + '.rom.js' : fs.readdirSync(GAME_DIR).filter(f => f.endsWith('.rom.js'))[0];
-if (!fs.existsSync(path.join(GAME_DIR, romFile))) { console.error('rom not found: ' + romFile + ' — run npm run build first'); process.exit(1); }
-const ROM = require(path.join(GAME_DIR, romFile));
+const gameId = process.argv[3] || fs.readdirSync(GAME_DIR).find(p => fs.existsSync(path.join(GAME_DIR, p, p + '.rom.js'))) || '';
+const romFile = path.join(GAME_DIR, gameId, gameId + '.rom.js');
+if (!fs.existsSync(romFile)) { console.error('rom not found: ' + romFile + ' — run npm run build first'); process.exit(1); }
+const ROM = require(romFile);
 const { createSystem } = require(path.join(__dirname, '..', 'public', 'nes-runtime.js'));
 
 const sys = createSystem({ rom: ROM, headless: true });

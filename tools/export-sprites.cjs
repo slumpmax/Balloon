@@ -9,13 +9,18 @@ const fs = require('fs');
 const { encodePNG } = require('./png.cjs');
 
 const GAME_DIR = path.join(__dirname, '..', 'public', 'game');
-const OUT_DIR = path.join(GAME_DIR, 'sprites');
 
-/* เลือกเกม: node tools/export-sprites.cjs [game-id] — default = ไฟล์แรกที่เจอ */
-const gameId = process.argv[2];
-const romFile = gameId ? gameId + '.rom.js' : fs.readdirSync(GAME_DIR).filter(f => f.endsWith('.rom.js'))[0];
-if (!fs.existsSync(path.join(GAME_DIR, romFile))) { console.error('rom not found: ' + romFile); process.exit(1); }
-const ROM = require(path.join(GAME_DIR, romFile));
+/* เลือกเกม: node tools/export-sprites.cjs [game-id] — default = เกมแรกที่เจอ
+ * แต่ละเกมอยู่ในโฟลเดอร์ของตัวเอง public/game/{game-id}/ ผลลัพธ์ลง public/game/{game-id}/sprites/ */
+function firstGameId() {
+  return fs.readdirSync(GAME_DIR).find(p => fs.existsSync(path.join(GAME_DIR, p, p + '.rom.js'))) || '';
+}
+const gameId = process.argv[2] || firstGameId();
+const gameDir = path.join(GAME_DIR, gameId);
+const romFile = gameId + '.rom.js';
+if (!fs.existsSync(path.join(gameDir, romFile))) { console.error('rom not found: ' + path.join(gameDir, romFile)); process.exit(1); }
+const OUT_DIR = path.join(gameDir, 'sprites');
+const ROM = require(path.join(gameDir, romFile));
 const { createSystem, PALETTE } = require(path.join(__dirname, '..', 'public', 'nes-runtime.js'));
 
 /* ---- 1. run a few frames so the game initializes the PPU palette ---- */
@@ -84,7 +89,7 @@ const palMeta = {
   sprite: range(0, 4).map(p => range(1, 4).map(i => '#' + palIndexHex(palIndices[16 + (p << 2) + i]))),
 };
 fs.writeFileSync(path.join(OUT_DIR, 'palette.json'), JSON.stringify(palMeta, null, 2));
-console.log('wrote', 'public/game/sprites/palette.json');
+console.log('wrote', path.relative(process.cwd(), path.join(OUT_DIR, 'palette.json')));
 console.log('backdrop:', palMeta.backdrop, 'bg0:', palMeta.bg[0].join(' '));
 
 function palIndexHex(idx) {

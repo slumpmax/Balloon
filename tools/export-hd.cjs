@@ -5,7 +5,7 @@
  * ที่กดผ่านตัวควบคุมจำลอง แล้วจับเฟรมจาก PPU ขยายด้วย scale2x สองรอบ (4x)
  * และตัดตัวละครออกจาก OAM เป็น PNG โปร่งใสแยก pose
  *
- * ผลลัพธ์: public/game/hd/
+ * ผลลัพธ์: public/game/{game-id}/hd/
  *   screenshots/  title.png  gameplay-1p.png  gameplay-2p.png  balloon-trip.png  attract-demo.gif
  *   sprites/      player1-pose*.png  player1-sheet.png  player2-sheet.png  enemy-sheet.png  manifest.json
  */
@@ -19,9 +19,9 @@ const GAME_DIR = path.join(__dirname, '..', 'public', 'game');
 
 /* เลือกเกม: node tools/export-hd.cjs [game-id] — default = balloon-fight-usa */
 const GAME_ID = process.argv[2] || 'balloon-fight-usa';
-const romFile = GAME_ID + '.rom.js';
-if (!fs.existsSync(path.join(GAME_DIR, romFile))) { console.error('rom not found: ' + romFile + ' — run npm run build:' + GAME_ID + ' first'); process.exit(1); }
-const ROM = require(path.join(GAME_DIR, romFile));
+const romFile = path.join(GAME_DIR, GAME_ID, GAME_ID + '.rom.js');
+if (!fs.existsSync(romFile)) { console.error('rom not found: ' + romFile + ' — run npm run build:' + GAME_ID + ' first'); process.exit(1); }
+const ROM = require(romFile);
 const { createSystem, PALETTE } = require(path.join(__dirname, '..', 'public', 'nes-runtime.js'));
 
 /* ต่อเกม: รูปแบบ composite ของตัวละคร (จากการ calibrate)
@@ -189,7 +189,7 @@ function writeSheet(dir, name, poses, perRow) {
 }
 
 /* ------------------------------------------------------------ 1. scenes */
-const OUT_DIR = path.join(GAME_DIR, 'hd', GAME_ID);
+const OUT_DIR = path.join(GAME_DIR, GAME_ID, 'hd');
 const SHOT_DIR = path.join(OUT_DIR, 'screenshots');
 const SPR_DIR = path.join(OUT_DIR, 'sprites');
 fs.mkdirSync(SHOT_DIR, { recursive: true });

@@ -45,7 +45,8 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 
 1. วางไฟล์ `.nes` (NROM) ใน `roms/`
 2. เพิ่ม script ใน `package.json`: `"build:xx": "node tools/nes2js.cjs public/game \"roms/<ไฟล์>.nes\""`
-3. รัน `npm run build:<id>` แล้วเพิ่ม 1 บรรทัดใน `public/games.js` (globalKey = id uppercase เปลี่ยน `-` เป็น `_`)
+3. รัน `npm run build:<id>` แล้วเพิ่ม 1 บรรทัดใน `public/games.js` (globalKey = id uppercase เปลี่ยน `-` เป็น `_`;
+   `romFile` = `"<id>/<id>.rom.js"` เพราะตัวแปลงเขียนไฟล์ละเกมลง `public/game/<id>/`)
 4. (ทางเลือก) เพิ่ม config ของเกมใน `tools/export-hd.cjs` — ถ้ายังไม่ calibrate ตัวละครให้ใช้ `{ skipSprites: true, scenes: ['title'] }` จะได้ title.png + GIF สำหรับ thumbnail เมนู
 
 > ตัวแปลง transpile **ทุก address ใน PRG** เป็น instruction (เหมือนที่ CPU 6502 ทำ — decode ได้จาก address ใดก็ได้)
@@ -65,7 +66,9 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 | `tools/export-hd.cjs` | ขับเกม headless → ฉาก HD 1024×960 + ตัวละครโปร่งใส + GIF attract demo |
 | `public/nes-runtime.js` | runtime: CPU core, PPU (BG/sprites/palette/scroll/NMI), APU (pulse/noise/tri/dmc), input, headless |
 | `public/index.html` | หน้าเล่นเกม (canvas + keyboard + audio) |
-| `public/game/*.rom.js` | เอาต์พุตที่ Generate (16266 cases ของ `switch(R.PC)`) + PRG/CHR/vectors |
+| `public/game/<id>/*.rom.js` | เอาต์พุตที่ Generate (16266 cases ของ `switch(R.PC)`) + PRG/CHR/vectors — เกมละโฟลเดอร์ของตัวเอง |
+| `public/game/<id>/hd/` | ฉาก HD + sprites + manifest ของเกมนั้น ๆ (จาก `export:hd`) |
+| `public/game/<id>/sprites/` | CHR sheets + `palette.json` ของเกมนั้น ๆ (จาก `export:sprites`) |
 
 ## หลักการทำงาน
 
@@ -89,8 +92,8 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 - ใช้ palette **Firebrandx 2C02** (มาตรฐาน Mesen/FCEUX) และสีพื้นจาก `$3F00` ตอน rendering-off
   เพื่อให้สีตรงต้นฉบับ (สลับได้ถ้าอยากลอง palette แบบอื่นใน `public/nes-runtime.js`)
 - NROM 16KB mirroring: `$8000-$BFFF` และ `$C000-$FFFF` ชี้ไป PRG คันเดียว
-- เมื่อ generate ใหม่ชื่อไฟล์ ROM อาจเปลี่ยน (`balloon-fight-usa.`*) ให้ตรวจ
-  ตรง `<script src>` ใน `public/index.html` ให้ตรงกัน
+- เมื่อ generate ใหม่ชื่อไฟล์ ROM อาจเปลี่ยน (`<id>.<id>.`*) ให้ตรวจรายการใน
+  `public/games.js` ให้ตรงกัน
 
 ## สถานะ
 
@@ -109,7 +112,7 @@ npm run serve        # รัน web server ที่พอร์ต 8080 แล
 ตัวละครตัดจาก OAM (composite 16×24 = 6 sprites) เป็น PNG โปร่งใสแยก pose ที่เกมวาดจริง ทั้งหมดเขียนด้วย
 encoder PNG/GIF ในตัว (`tools/png.cjs`, `tools/gif.cjs` + round-trip LZW) ไม่เพิ่ม dependency
 
-ผลลัพธ์ใน `public/game/hd/`:
+ผลลัพธ์ใน `public/game/<id>/hd/` (เกมละโฟลเดอร์):
 
 | ไฟล์ | ความหมาย |
 |---|---|
@@ -125,7 +128,8 @@ encoder PNG/GIF ในตัว (`tools/png.cjs`, `tools/gif.cjs` + round-trip L
 ## Export sprite
 
 `npm run export:sprites` อ่าน 8KB CHR จาก ROM แล้ว decode ทุก 256 ไทล์ (2 pattern table × 128)
-เป็น PNG ลง `public/game/sprites/` — ระบายสีด้วย palette กับพื้นจริงที่เกมโหลดเองลง PPU ระหว่างรัน:
+เป็น PNG ลง `public/game/<id>/sprites/` — ระบายสีด้วย palette กับพื้นจริงที่เกมโหลดเองลง PPU ระหว่างรัน
+(รับ game-id ต่อท้าย เช่น `npm run export:sprites nuts-milk-japan`):
 
 | ไฟล์ | ความหมาย |
 |---|---|

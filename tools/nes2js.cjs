@@ -326,7 +326,8 @@ function main() {
   const code = generate(rom.prg, allAddrs);
 
   const name = path.basename(romPath, '.nes').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  fs.mkdirSync(OUT_DIR, { recursive: true });
+  const GAME_OUT = path.join(OUT_DIR, name);   /* แต่ละเกมแยกโฟลเดอร์ของตัวเอง (public/game/{id}/) */
+  fs.mkdirSync(GAME_OUT, { recursive: true });
 
   /* global key derive จากชื่อไฟล์ (เช่น 'nuts-&-milk-japan' -> NUTS_MILK_JAPAN)
      เกมละ key ของตัวเอง จึงโหลดหลาย .rom.js ในหน้าเดียวกันได้ */
@@ -362,7 +363,7 @@ ${code}
   if (typeof module !== 'undefined') module.exports = g['${GKEY}'];
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 `;
-  fs.writeFileSync(path.join(OUT_DIR, name + '.rom.js'), romJs);
+  fs.writeFileSync(path.join(GAME_OUT, name + '.rom.js'), romJs);
 
   const resJs = `/* Graphics + metadata resources extracted from ${path.basename(romPath)} */
 (function (g) {
@@ -377,8 +378,8 @@ ${code}
   if (typeof module !== 'undefined') module.exports = g['${GKEY}'];
 })(typeof globalThis !== 'undefined' ? globalThis : this);
 `;
-  fs.writeFileSync(path.join(OUT_DIR, name + '.resources.js'), resJs);
-  fs.writeFileSync(path.join(OUT_DIR, name + '.disasm.txt'), disasm(rom.prg));
+  fs.writeFileSync(path.join(GAME_OUT, name + '.resources.js'), resJs);
+  fs.writeFileSync(path.join(GAME_OUT, name + '.disasm.txt'), disasm(rom.prg));
 
   const manifest = {
     game: name,
@@ -391,7 +392,7 @@ ${code}
     instructionsTranspiled: allAddrs.length,
     generated: new Date().toISOString(),
   };
-  fs.writeFileSync(path.join(OUT_DIR, name + '.manifest.json'), JSON.stringify(manifest, null, 2));
+  fs.writeFileSync(path.join(GAME_OUT, name + '.manifest.json'), JSON.stringify(manifest, null, 2));
   console.log('OK: ' + name + ' -> ' + allAddrs.length + ' instructions, ' + rom.prg.length + 'B PRG, ' + rom.chr.length + 'B CHR');
 }
 
