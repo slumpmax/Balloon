@@ -11,8 +11,10 @@ const { encodePNG } = require('./png.cjs');
 const GAME_DIR = path.join(__dirname, '..', 'public', 'game');
 const OUT_DIR = path.join(GAME_DIR, 'sprites');
 
-const romFile = fs.readdirSync(GAME_DIR).filter(f => f.endsWith('.rom.js'))[0];
-if (!romFile) { console.error('no .rom.js found in ' + GAME_DIR); process.exit(1); }
+/* เลือกเกม: node tools/export-sprites.cjs [game-id] — default = ไฟล์แรกที่เจอ */
+const gameId = process.argv[2];
+const romFile = gameId ? gameId + '.rom.js' : fs.readdirSync(GAME_DIR).filter(f => f.endsWith('.rom.js'))[0];
+if (!fs.existsSync(path.join(GAME_DIR, romFile))) { console.error('rom not found: ' + romFile); process.exit(1); }
 const ROM = require(path.join(GAME_DIR, romFile));
 const { createSystem, PALETTE } = require(path.join(__dirname, '..', 'public', 'nes-runtime.js'));
 

@@ -1,0 +1,15 @@
+{
+  "game": "baseball-usa-europe",
+  "source": "Baseball (USA, Europe).nes",
+  "mapper": 0,
+  "prgBanks": 1,
+  "chrBanks": 1,
+  "mirrorVertical": false,
+  "vectors": {
+    "reset": 50187,
+    "nmi": 49222,
+    "irq": 50238
+  },
+  "instructionsTranspiled": 16384,
+  "generated": "2026-09-17T14:13:10.876Z"
+}

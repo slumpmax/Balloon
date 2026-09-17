@@ -3,81 +3,230 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Balloon Fight — NES2JS</title>
+<title>NES2JS — เล่นเกม NES ที่แปลงเป็น JS</title>
 <style>
-  html, body { background: #16161d; color: #d7d7e0; font-family: ui-monospace, monospace; margin: 0; }
-  header { padding: 14px 18px; border-bottom: 1px solid #2a2a36; }
-  h1 { font-size: 17px; margin: 0; letter-spacing: 0.5px; }
-  h1 small { color: #8a8aa0; font-weight: normal; }
-  main { display: flex; gap: 22px; padding: 18px; align-items: flex-start; flex-wrap: wrap; }
-  canvas { background: #000; border: 2px solid #2a2a36; display: block; max-width: 100%; height: auto; }
-  canvas.m1 { image-rendering: pixelated; }
-  canvas:fullscreen, canvas:-webkit-full-screen {
-    width: 100vw; height: 100vh; max-width: none;
-    object-fit: contain; image-rendering: pixelated;
-    background: #000; border: none;
+  :root {
+    --bg:#16161d; --panel:#1c1c26; --line:#2a2a36; --txt:#d7d7e0; --dim:#8a8aa0; --acc:#8ad08a;
+    /* ขนาดจอเกม: โหมดปกติจำกัด 448px และย่อตามความสูงหน้าต่างเสมอ
+       (สงวนเผื่อ header + ปุ่มโหมด + แถบควบคุมใต้จอ ~310px เพื่อไม่ให้หน้าล้นลงล่าง)
+       โหมดเต็มกว้าง (Q) ใช้พื้นที่ที่เหลือทั้งหมดของหน้าต่าง */
+    --screen-max: 448px;
+    --fit-h: calc((100vh - 310px) * 256 / 240);
+    --wide-gap: 16px;
+    --wide-fit-w: calc((100vh - 200px) * 256 / 240);
+    --wide-max-w: calc(100vw - var(--wide-gap) * 2);
   }
-  .modes { margin-top: 10px; display: flex; gap: 6px; align-items: center; }
-  .modes button.on { background: #3c6c3c; border-color: #8ad08a; }
-  .modes span { font-size: 11px; color: #8a8aa0; }
-  .panel { font-size: 13px; line-height: 1.7; max-width: 340px; }
-  .panel h2 { font-size: 13px; color: #8ad08a; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: 1px; }
-  kbd { background: #2a2a36; border-radius: 3px; padding: 1px 6px; font-size: 12px; }
-  #status { color: #e8e8f0; font-size: 12px; margin-top: 12px; }
-  .bar { background: #2a2a36; height: 6px; width: 260px; border-radius: 3px; overflow: hidden; }
-  .bar div { background: #8ad08a; height: 100%; width: 0%; }
-  button { background: #2a2a36; color: #d7d7e0; border: 1px solid #3c3c4c; border-radius: 4px; padding: 6px 12px; cursor: pointer; font-family: inherit; }
-  button:hover { background: #3c3c4c; }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--txt); font-family: ui-monospace, monospace; margin: 0; }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 10px; max-width: 770px; margin: 0 auto; }
+  h1 { font-size: 15px; margin: 0; letter-spacing: .5px; }
+  h1 small { color: var(--dim); font-weight: normal; }
+  .hdr-btn {
+    margin-left: auto; background: var(--panel); color: var(--txt); border: 1px solid #3c3c4c;
+    border-radius: 6px; padding: 5px 12px; font-family: inherit; font-size: 12px; cursor: pointer;
+  }
+  .hdr-btn:hover { background: #2a2a3a; }
+  .hdr-btn.on { background: #3c6c3c; border-color: var(--acc); color: #eaffea; }
+
+  .layout {
+    display: flex;
+    gap: 16px; padding: 16px;
+    align-items: flex-start;
+    /* กว้างสุด = เนื้อหาจริงพอดี (เมนู 250 + gap 16 + จอ 472 + padding 32)
+       กลุ่มเมนู+จอ+ข้อมูลจึงอยู่กลางหน้าจอเสมอ ไม่เบี้ยวซ้าย */
+    max-width: 770px; margin: 0 auto;
+  }
+  .menu { flex: 0 0 250px; min-width: 0; }
+  /* คอลัมน์ขวา: จอ → ปุ่มโหมด → แถบควบคุม — ทั้งสามชิ้นกว้างเท่ากันเสมอ
+     จัดกึ่งกลางคอลัมน์ได้โดยขอบซ้ายยังเรียงตรงกันหมด (ชิดซ้ายเท่ากันหมดเมื่อเทียบกันเอง) */
+  .main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .screen-frame, .zoom, .info {
+    width: min(calc(var(--screen-max) + 24px), 100%, calc(var(--fit-h) + 24px));
+    max-width: 100%;
+  }
+
+  /* ---------- โหมดเต็มกว้าง (ยุบแผงข้าง: เมนู/ควบคุมซ่อน เหลือจอ+ปุ่ม) ---------- */
+  body.wide .layout { max-width: none; }   /* เต็มกว้างใช้พื้นที่ทั้งหน้าต่าง */
+  body.wide header { max-width: none; }
+  body.wide .menu, body.wide .info { display: none; }
+  body.wide .screen-frame, body.wide .zoom, body.wide .info {
+    width: min(calc(var(--wide-max-w) + 24px), calc(var(--wide-fit-w) + 24px));
+  }
+  body.wide #screen { width: min(var(--wide-max-w), var(--wide-fit-w)); }
+
+  /* ---------- เมนูเกม (ซ้าย) — สไตล์ dialog เกม NES ---------- */
+  .menu {
+    align-self: stretch;
+    background: #0b0b12;
+    border: 2px solid #38384a; border-radius: 10px;
+    box-shadow: inset 0 0 0 2px #12121c;
+    padding: 14px 12px;
+    display: flex; flex-direction: column;
+    position: relative;
+  }
+  /* มุมกรอบแบบ dialog เกม */
+  .menu::before, .menu::after { content: ''; position: absolute; width: 10px; height: 10px; border: 2px solid var(--acc); }
+  .menu::before { top: 7px; left: 7px; border-right: none; border-bottom: none; }
+  .menu::after { bottom: 7px; right: 7px; border-left: none; border-top: none; }
+  .menu h2 {
+    font-size: 12px; color: var(--acc); text-align: center; letter-spacing: 3px;
+    margin: 2px 0 14px; padding-bottom: 12px; border-bottom: 2px solid var(--line);
+    text-shadow: 0 0 10px rgba(138, 208, 138, .4);
+  }
+  .menu h2::before { content: '◆ '; letter-spacing: 0; }
+  .game-item {
+    position: relative; display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    margin: 0 0 8px; background: #12121c; color: var(--txt); border: 2px solid #262633;
+    border-radius: 4px; padding: 7px 9px; cursor: pointer; font-family: inherit; font-size: 13px;
+    transition: background .08s, border-color .08s;
+  }
+  .game-item:hover { background: #191926; border-color: #3a3a50; }
+  .game-item.on {
+    background: #1d3520; border-color: var(--acc); color: #eaffea;
+    box-shadow: 0 0 0 1px #000, 0 0 12px rgba(138, 208, 138, .28);
+  }
+  .game-item.on::after {
+    content: '▶'; position: absolute; right: 9px; color: var(--acc); font-size: 10px;
+    text-shadow: 0 0 6px rgba(138, 208, 138, .8);
+  }
+  .game-item.hl { border-color: #d7d7e0; }
+  .game-item.hl.on { border-color: var(--acc); }
+  .game-item .thumb {
+    flex: 0 0 48px; width: 48px; height: 45px; border-radius: 2px; border: 1px solid #262633;
+    background: #000 center / cover no-repeat; image-rendering: pixelated;
+  }
+  .game-item.on .thumb, .game-item.hl .thumb { border-color: var(--acc); }
+  .game-item .gt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 14px; }
+  .menu-hint { margin-top: auto; padding-top: 12px; border-top: 2px solid var(--line); font-size: 9.5px; color: var(--dim); line-height: 2; }
+  .menu-hint kbd { background: #12121c; border: 1px solid #2e2e3c; border-radius: 3px; padding: 0 5px; font-size: 9.5px; color: var(--txt); }
+  .menu-copy { margin-top: 8px; text-align: center; font-size: 9px; color: #4c4c60; letter-spacing: 1px; }
+
+  /* ---------- แถบควบคุม/ข้อมูล (ใต้ปุ่มโหมด กว้างเท่าจอ) ---------- */
+  .info {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 4px 18px; font-size: 10.5px; line-height: 2;
+  }
+  .ctrl-group h2 { font-size: 10px; color: var(--acc); text-transform: uppercase; letter-spacing: 1px; margin: 0 0 2px; }
+  .ctrl-group > div { color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .info kbd { background: #101018; border: 1px solid #2e2e3c; border-bottom-width: 2px; border-radius: 3px; padding: 0 5px; font-size: 9.5px; color: var(--txt); font-family: inherit; }
+  .status-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; margin-top: 4px; padding-top: 8px; border-top: 1px solid var(--line); }
+  #status { color: #e8e8f0; font-size: 11px; flex: 0 0 auto; }
+  .bar { background: var(--line); height: 5px; flex: 1; border-radius: 3px; overflow: hidden; }
+  .bar div { background: var(--acc); height: 100%; width: 0%; }
+
+  /* ---------- จอเกม ---------- */
+  .screen { min-width: 0; width: 100%; }
+  /* จัดกลางกรอบภายใน .screen — จำเป็นในโหมดเต็มกว้างที่ .screen กว้างกว่ากรอบมาก */
+  .screen-frame { background: #000; border: 2px solid var(--line); border-radius: 8px; padding: 10px; margin: 0 auto; }
+  canvas#screen {
+    /* ขนาดภายใน = ตามโหมด (256/512/1024) — ขนาดแสดงผลย่อขยายตามหน้าต่าง
+       คงสัดส่วน 16:15 ของ NES เสมอ (aspect-ratio) แบบ pixelated */
+    display: block; margin: 0 auto;
+    width: min(var(--screen-max), 100%, var(--fit-h));
+    aspect-ratio: 256 / 240;
+    height: auto; background: #000;
+    image-rendering: pixelated;
+  }
+
+  /* ---------- ปุ่มโหมด (ใต้จอ) ---------- */
+  .zoom { display: flex; gap: 8px; justify-content: flex-start; }
+  .zoom button {
+    flex: 1 1 0; width: auto; min-width: 0; max-width: 120px; height: 36px;
+    background: var(--panel); color: var(--txt); border: 1px solid #3c3c4c;
+    border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 13px; padding: 0;
+  }
+  .zoom button:hover { background: #2a2a3a; }
+  .zoom button.on { background: #3c6c3c; border-color: var(--acc); color: #eaffea; }
+
+  /* ---------- จอแคบ/มือถือ: เรียงแนวตั้ง จอขึ้นก่อน แผงควบคุมเป็นคอลัมน์เดียว ----------
+     (วางไว้ท้ายสุดเพื่อให้ชนะ base rules เสมอ) */
+  @media (max-width: 760px) {
+    .layout { flex-direction: column; }
+    .main { flex: 0 0 auto; width: 100%; order: 1; }
+    .menu { flex: 0 0 auto; width: 100%; order: 2; }
+    .info { grid-template-columns: 1fr; }
+    .ctrl-group > div { white-space: normal; }
+  }
+
+  /* ---------- Fullscreen ---------- */
+  canvas#screen:fullscreen, canvas#screen:-webkit-full-screen {
+    width: 100vw; height: 100vh; max-width: none; aspect-ratio: auto;
+    object-fit: contain; image-rendering: pixelated; background: #000; border: none; border-radius: 0;
+  }
 </style>
 </head>
 <body>
-<header><h1>Balloon Fight <small>— .nes แปลงเป็น JS + resources (6502 → JS transpile, ไม่ใช้ emulator)</small></h1></header>
-<main>
-  <canvas id="screen" width="1024" height="960"></canvas>
-  <div class="modes">
-    <button id="m1">1x</button>
-    <button id="m2">HD 2x</button>
-    <button id="m4" class="on">HD 4x</button>
-    <button id="mfs">⛶ เต็มจอ</button>
-    <span>Scale2x เรียลไทม์ · กด H สลับโหมด · L เต็มจอ</span>
-  </div>
-  <div class="panel">
-    <h2>ควบคุม</h2>
-    <div><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> เลื่อน / ลอย</div>
-    <div><kbd>Z</kbd> = B (เป่าลูกโป่ง) &nbsp; <kbd>X</kbd> = A (เตะ)</div>
-    <div><kbd>Enter</kbd> = Start &nbsp; <kbd>Shift</kbd> = Select</div>
-    <h2>ผู้เล่น 2</h2>
-    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> เลื่อน / ลอย</div>
-    <div><kbd>F</kbd> = B (เป่าลูกโป่ง) &nbsp; <kbd>G</kbd> = A (เตะ)</div>
-    <div><kbd>C</kbd> = Start &nbsp; <kbd>V</kbd> = Select</div>
-    <div><kbd>P</kbd> หยุด/เล่นต่อ &nbsp; <kbd>R</kbd> restart &nbsp; <kbd>M</kbd> เปิด/ปิดเสียง &nbsp; <kbd>H</kbd> สลับ 1x/HD &nbsp; <kbd>L</kbd> เต็มจอ</div>
-    <h2>สถานะ</h2>
-    <div id="status">กำลังโหลด...</div>
-    <div class="bar"><div id="fpsbar"></div></div>
-    <h2>หมายเหตุ</h2>
-    <div>โค้ดเกมถูกแปลงจาก 6502 machine code เป็น JS (`balloon-fight.rom.js`);
-        การ์ดจอ PPU/เสียง APU/แผนที่หน่วยความจำเป็นชั้น runtime ขั้นต่ำที่จำเป็น</div>
-  </div>
-</main>
+<header>
+  <h1>NES2JS <small>— .nes แปลงเป็น JS (6502 → JS transpile, ไม่ใช้ emulator)</small></h1>
+  <button id="wideBtn" class="hdr-btn" title="สลับเต็มความกว้าง (Q)">⤢ เต็มกว้าง</button>
+</header>
 
-<script src="game/balloon-fight-usa.rom.js"></script>
-<script src="game/balloon-fight-usa.resources.js"></script>
+<div class="layout">
+  <nav class="menu">
+    <h2>เลือกเกม</h2>
+    <div id="gamelist"></div>
+    <div class="menu-hint"><kbd>Tab</kbd> เปิดเมนู · <kbd>&uarr;</kbd><kbd>&darr;</kbd> เลื่อน · <kbd>Enter</kbd> สลับเกม · <kbd>Esc</kbd> ออก</div>
+    <div class="menu-copy">© 2026 NES2JS · 6502 → JS</div>
+  </nav>
+
+  <div class="main">
+    <div class="screen">
+      <div class="screen-frame">
+        <canvas id="screen" width="1024" height="960"></canvas>
+      </div>
+    </div>
+
+    <div class="zoom">
+      <button id="m1" class="zbtn">1x</button>
+      <button id="m2" class="zbtn">2x</button>
+      <button id="m4" class="zbtn on">4x</button>
+      <button id="mfs" class="zbtn" title="เต็มจอ (L)">⛶</button>
+    </div>
+
+    <div class="info">
+      <div class="ctrl-group">
+        <h2>ผู้เล่น 1</h2>
+        <div><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> เลื่อน · <kbd>Z</kbd> B · <kbd>X</kbd> A</div>
+        <div><kbd>Enter</kbd> Start · <kbd>Shift</kbd> Select</div>
+      </div>
+      <div class="ctrl-group">
+        <h2>ผู้เล่น 2</h2>
+        <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> เลื่อน · <kbd>F</kbd> B · <kbd>G</kbd> A</div>
+        <div><kbd>C</kbd> Start · <kbd>V</kbd> Select</div>
+      </div>
+      <div class="ctrl-group">
+        <h2>ระบบ</h2>
+        <div><kbd>P</kbd> หยุด · <kbd>R</kbd> รีสตาร์ท · <kbd>M</kbd> เสียง (เปิด default)</div>
+        <div><kbd>H</kbd> โหมด · <kbd>L</kbd> เต็มจอ · <kbd>Q</kbd> เต็มกว้าง · <kbd>Tab</kbd> เมนู</div>
+      </div>
+      <div class="ctrl-group">
+        <h2>เกมแพด</h2>
+        <div>แพด 1-2 · B = b0 · A = b1</div>
+        <div>Select = b8 · Start = b9 · ทิศ = dpad/แกน</div>
+      </div>
+      <div class="status-row">
+        <div id="status">กำลังโหลด...</div>
+        <div class="bar"><div id="fpsbar"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="games.js"></script>
 <script src="nes-runtime.js"></script>
 <script>
 (function () {
+  'use strict';
   var canvas = document.getElementById('screen');
   var statusEl = document.getElementById('status');
   var fpsEl = document.getElementById('fpsbar');
-
-  var sys = NesRuntime.createSystem({ rom: BALLOON_FIGHT });
-  sys.attachCanvas(canvas);
-
-  /* ---------------- real-time Scale2x HD rendering ----------------
-   * จับเฟรม 256x240 จาก video.pixels (palette-index) แล้วขยายในโดเมน index
-   * ก่อนแปลงเป็นสี — คมกริบแบบเดียวกับตัว exporter (tools/scaler.cjs)
-   * โหมด: 1x (putImageData ตรง ๆ) / 2x / 4x (scale2x ตามจำนวนรอบ)
-   */
+  var GAMES = window.NES_GAMES || [];
   var NES_W = 256, NES_H = 240;
+
+  /* ---------------- โหมดขยาย (Scale2x เรียลไทม์) ----------------
+   * canvas ภายใน = ความละเอียดจริงตามโหมด (256/512/1024)
+   * ขนาดแสดงผลย่อขยายตามหน้าต่างด้วย CSS (pixelated, คงสัดส่วน) */
   var mode = 4, modeBtns = { 1: document.getElementById('m1'), 2: document.getElementById('m2'), 4: document.getElementById('m4') };
   var img1x = null, img2x = null, img4x = null, off1x = null, offCtx1x = null, off2x = null, offCtx2x = null;
   function ensureBuffers() {
@@ -90,88 +239,277 @@
   }
   function setMode(m) {
     mode = m;
-    canvas.classList.toggle('m1', m === 1);
+    canvas.width = NES_W * m;               /* ความละเอียดภายในตามโหมด */
+    canvas.height = NES_H * m;
     for (var k in modeBtns) modeBtns[k].classList.toggle('on', +k === m);
+    savePrefs();
   }
   modeBtns[1].onclick = function () { setMode(1); };
   modeBtns[2].onclick = function () { setMode(2); };
   modeBtns[4].onclick = function () { setMode(4); };
 
-  /* ---------------- Fullscreen (ความคมเก็บด้วย CSS pixelated + object-fit) ---------------- */
+  /* ---------------- Fullscreen ---------------- */
   var fsBtn = document.getElementById('mfs');
   function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
   function toggleFullscreen() {
-    if (fsElement()) {
-      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    } else {
-      var rq = canvas.requestFullscreen || canvas.webkitRequestFullscreen;
-      if (rq) rq.call(canvas);
-    }
+    if (fsElement()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    else { var rq = canvas.requestFullscreen || canvas.webkitRequestFullscreen; if (rq) rq.call(canvas); }
   }
-  function updateFsLabel() { fsBtn.textContent = fsElement() ? '✕ ออกจากเต็มจอ' : '⛶ เต็มจอ'; }
-  fsBtn.onclick = function () { toggleFullscreen(); };
+  function updateFsLabel() { fsBtn.textContent = fsElement() ? 'Exit' : '⛶'; }
+  fsBtn.onclick = function () { toggleFullscreen(); focusPlay(); };
   document.addEventListener('fullscreenchange', updateFsLabel);
   document.addEventListener('webkitfullscreenchange', updateFsLabel);
 
-  var running = true, sound = false;
-  var K = {
-    ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
-    z: 'B', x: 'A', Enter: 'start', Shift: 'sel'
-  };
-  var K2 = {
-    w: 'up', a: 'left', s: 'down', d: 'right',
-    f: 'B', g: 'A', c: 'start', v: 'sel'
-  };
-  var MAP = {};
-  for (var pk in K) MAP[pk] = [0, K[pk]];
-  for (var pk2 in K2) MAP[pk2] = [1, K2[pk2]];
-  var pressed = {};
-  function apply() {
-    for (var k in MAP) sys.setButton(MAP[k][0], MAP[k][1], !!pressed[k]);
+  /* ---------------- จำค่าที่ตั้งไว้ (localStorage) ---------------- */
+  var SKEY = 'nes2js.prefs.v1', prefs = {};
+  try { prefs = JSON.parse(localStorage.getItem(SKEY) || '{}') || {}; } catch (e) { prefs = {}; }
+  function savePrefs() {
+    try {
+      localStorage.setItem(SKEY, JSON.stringify({
+        game: currentGame ? currentGame.id : null,
+        mode: mode,
+        wide: document.body.classList.contains('wide'),
+        sound: sound
+      }));
+    } catch (e) { /* storage ใช้ไม่ได้ (private mode ฯลฯ) — ข้าม */ }
   }
+
+  /* ---------------- โหมดเต็มกว้าง (ยุบแผงข้าง) ---------------- */
+  var wideBtn = document.getElementById('wideBtn');
+  function setWide(on) {
+    document.body.classList.toggle('wide', !!on);
+    wideBtn.classList.toggle('on', !!on);
+    wideBtn.textContent = on ? '⤡ ปกติ' : '⤢ เต็มกว้าง';
+  }
+  function toggleWide() { setWide(!document.body.classList.contains('wide')); savePrefs(); }
+  wideBtn.onclick = function () { toggleWide(); focusPlay(); };
+
+  /* ---------------- เมนูเกมด้วยคีย์บอร์ด (Tab → ↑↓ → Enter) ----------------
+   * Tab เปิด/ปิดโหมดเมนู (NES ไม่ใช้ Tab จึงไม่ชนกับปุ่มเกม), ลูกศรขึ้น/ลงเลือก,
+   * Enter สลับเกมทันที, Esc ออก — ขณะเมนูเปิดลูกศรควบคุมเมนู ปิดเมนูแล้วกลับไปควบคุมเกม */
+  var menuMode = false, menuIdx = 0;
+  function focusPlay() { try { canvas.focus({ preventScroll: true }); } catch (e) { canvas.focus(); } }
+  function refreshMenuHl() {
+    var items = listEl.querySelectorAll('.game-item');
+    items.forEach(function (el, i) {
+      el.classList.toggle('hl', menuMode && i === menuIdx);
+    });
+    if (menuMode && items[menuIdx]) items[menuIdx].scrollIntoView({ block: 'nearest' });
+  }
+  function setMenuMode(on) {
+    menuMode = on;
+    if (on) {
+      menuIdx = 0;
+      for (var i = 0; i < GAMES.length; i++) if (currentGame && GAMES[i].id === currentGame.id) menuIdx = i;
+    }
+    refreshMenuHl();
+  }
+  function menuMove(d) { menuIdx = (menuIdx + d + GAMES.length) % GAMES.length; refreshMenuHl(); }
+  function menuCommit() {
+    if (GAMES[menuIdx]) { setMenuMode(false); loadGame(GAMES[menuIdx]); focusPlay(); }
+  }
+
+  /* ---------------- โหลด/สลับเกม ---------------- */
+  var sys = null, currentGame = null, running = true;
+  var sound = prefs.sound !== false;      /* เสียงเปิดเป็นค่าเริ่มต้น (ปิดได้ด้วย M) */
+  var loadedScripts = {};
+  var listEl = document.getElementById('gamelist');
+
+  function renderMenu() {
+    listEl.innerHTML = '';
+    GAMES.forEach(function (g) {
+      var b = document.createElement('button');
+      b.className = 'game-item' + (currentGame && g.id === currentGame.id ? ' on' : '');
+      var th = document.createElement('span');
+      th.className = 'thumb';
+      if (g.shot) th.style.backgroundImage = 'url("' + g.shot + '")';
+      var tx = document.createElement('span');
+      tx.className = 'gt';
+      tx.textContent = g.title;
+      b.appendChild(th);
+      b.appendChild(tx);
+      b.onclick = function () { loadGame(g); focusPlay(); };
+      listEl.appendChild(b);
+    });
+    refreshMenuHl();
+  }
+
+  function loadScriptOnce(file, cb) {
+    if (loadedScripts[file]) { cb(); return; }
+    var s = document.createElement('script');
+    s.src = 'game/' + file;
+    s.onload = function () { loadedScripts[file] = true; cb(); };
+    s.onerror = function () { statusEl.textContent = 'โหลด ' + file + ' ไม่สำเร็จ'; };
+    document.body.appendChild(s);
+  }
+
+  function loadGame(game) {
+    if (currentGame && game.id === currentGame.id) return;
+    statusEl.textContent = 'กำลังโหลด ' + game.title + '...';
+    loadScriptOnce(game.romFile, function () {
+      var rom = window[game.globalKey];
+      if (!rom) { statusEl.textContent = 'ไม่พบ ROM object (' + game.globalKey + ')'; return; }
+      sys = NesRuntime.createSystem({ rom: rom });
+      sys.attachCanvas(canvas);
+      if (sound) sys.startAudio();   /* ถ้ายังไม่ผ่าน gesture → resume ตอน gesture แรก */
+      currentGame = game;
+      running = true;
+      renderMenu();
+      savePrefs();
+      statusEl.textContent = game.title + ' — พร้อมเล่น' + (sound ? ' 🔊' : ' 🔇');
+    });
+  }
+
+  /* ---------------- คีย์บอร์ด (อิงตำแหน่งปุ่มกายภาพ e.code) ----------------
+   * ใช้ e.code แทน e.key — กด Z/X/WASD ฯลฯ ติดเสมอไม่ว่าจะสลับภาษาคีย์บอร์ดเป็นอะไร
+   * (เช่น layout ไทยกดปุ่มตำแหน่ง Z จะได้ key='ผ' แต่ code='KeyZ' ยังเหมือนเดิม) */
+  var KC = {
+    ArrowLeft: [0, 'left'], ArrowRight: [0, 'right'], ArrowUp: [0, 'up'], ArrowDown: [0, 'down'],
+    KeyZ: [0, 'B'], KeyX: [0, 'A'], Enter: [0, 'start'], NumpadEnter: [0, 'start'], ShiftLeft: [0, 'sel'], ShiftRight: [0, 'sel'],
+    KeyW: [1, 'up'], KeyA: [1, 'left'], KeyS: [1, 'down'], KeyD: [1, 'right'],
+    KeyF: [1, 'B'], KeyG: [1, 'A'], KeyC: [1, 'start'], KeyV: [1, 'sel']
+  };
+  /* fallback เดิม (เบราว์เซอร์เก่าที่ไม่มี e.code) */
+  var KF = { ArrowLeft: 1, ArrowRight: 1, ArrowUp: 1, ArrowDown: 1, z: 1, x: 1, Enter: 1, Shift: 1, w: 1, a: 1, s: 1, d: 1, f: 1, g: 1, c: 1, v: 1 };
+  var KV = { ArrowLeft: [0, 'left'], ArrowRight: [0, 'right'], ArrowUp: [0, 'up'], ArrowDown: [0, 'down'], z: [0, 'B'], x: [0, 'A'], Enter: [0, 'start'], Shift: [0, 'sel'], w: [1, 'up'], a: [1, 'left'], s: [1, 'down'], d: [1, 'right'], f: [1, 'B'], g: [1, 'A'], c: [1, 'start'], v: [1, 'sel'] };
+  var pressed = {};
+  function padOf(e) {
+    if (e.code && KC[e.code]) return KC[e.code];
+    if (KF[e.key] && KV[e.key]) return KV[e.key];
+    return null;
+  }
+  function apply() {
+    for (var k in pressed) {
+      var m = KC[k] || KV[k];
+      if (m && sys) sys.setButton(m[0], m[1], !!pressed[k]);
+    }
+  }
+  window.__input = { pressed: pressed };   /* ใช้ debug/ทดสอบ */
   window.addEventListener('keydown', function (e) {
-    if (e.key === 'p' || e.key === 'P') { running = !running; return; }
-    if (e.key === 'r' || e.key === 'R') { sys.reset(); return; }
-    if (e.key === 'm' || e.key === 'M') { sound = !sound; if (sound) sys.startAudio(); return; }
-    if (e.key === 'h' || e.key === 'H') { setMode(mode === 4 ? 1 : (mode === 1 ? 2 : 4)); return; }
-    if (e.key === 'l' || e.key === 'L') { toggleFullscreen(); return; }
-    if (MAP[e.key] !== undefined) { e.preventDefault(); pressed[e.key] = true; apply(); }
+    var code = e.code || e.key;
+    if (code === 'KeyP') { running = !running; return; }
+    if (code === 'KeyR') { if (sys) sys.reset(); return; }
+    if (code === 'KeyM') {
+      sound = !sound;
+      if (sys) { if (sound) sys.startAudio(); else sys.stopAudio(); }
+      if (currentGame) statusEl.textContent = currentGame.title + ' — พร้อมเล่น' + (sound ? ' 🔊' : ' 🔇');
+      savePrefs(); return;
+    }
+    if (code === 'KeyH') { setMode(mode === 4 ? 1 : (mode === 1 ? 2 : 4)); return; }
+    if (code === 'KeyL') { toggleFullscreen(); return; }
+    if (code === 'KeyQ') { toggleWide(); return; }
+    if (code === 'Tab') { e.preventDefault(); setMenuMode(!menuMode); focusPlay(); return; }
+    if (menuMode) {
+      if (code === 'ArrowDown') { e.preventDefault(); menuMove(1); return; }
+      if (code === 'ArrowUp') { e.preventDefault(); menuMove(-1); return; }
+      if (code === 'Enter' || code === 'NumpadEnter') { e.preventDefault(); menuCommit(); return; }
+      if (code === 'Escape') { e.preventDefault(); setMenuMode(false); return; }
+    }
+    var m = padOf(e);
+    if (m) { e.preventDefault(); pressed[code] = true; apply(); }
   });
   window.addEventListener('keyup', function (e) {
-    if (MAP[e.key] !== undefined) { pressed[e.key] = false; apply(); }
+    var code = e.code || e.key;
+    var m = padOf(e);
+    if (m) { pressed[code] = false; apply(); }
   });
 
-  var last = performance.now(), frames = 0, fps = 0;
-  (function loop(t) {
-    requestAnimationFrame(loop);
+  /* ---------------- เสียง: เปิด default + unlock ด้วย gesture แรก ----------------
+   * เบราว์เซอร์บล็อก AudioContext จนกว่าผู้ใช้จะกด/คลิก — เราสร้างไว้ตั้งแต่บูต
+   * แล้ว resume ทันทีที่ผู้ใช้โต้ตอบครั้งแรก (คลิก/กดปุ่มใด ๆ) */
+  var audioUnlocked = false;
+  function unlockAudio() {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    if (sound && sys) sys.startAudio();   /* resume ถ้ามี context อยู่แล้ว / สร้างใหม่ถ้ายัง */
+  }
+  window.addEventListener('pointerdown', unlockAudio, { once: false });
+  window.addEventListener('keydown', unlockAudio, { once: false });
+
+  /* ---------------- เกมแพด (ทั้ง 2 ตัว) ----------------
+   * pad1 = gamepads[0], pad2 = gamepads[1] (ตามลำดับที่เบราว์เซอร์รายงาน)
+   * B = b0 (กากบาทซ้าย/ปุ่ม 1) · A = b1 · Select = b8 · Start = b9
+   * ทิศทาง = แกน analog + dpad (b12-b15) — รองรับทั้งแพดมี/ไม่มี dpad */
+  var GP_B = 0, GP_A = 1, GP_SELECT = 8, GP_START = 9;
+  var GP_DPAD = { 12: 'up', 13: 'down', 14: 'left', 15: 'right' };
+  var gpState = [ {}, {} ];                /* สถานะเดิมเพื่อจับขอบขึ้น/ลง */
+  var gpPrev = [ {}, {} ];
+  function pollGamepads() {
+    if (!navigator.getGamepads) return;
+    var pads = navigator.getGamepads();
+    var n = 0;
+    for (var i = 0; i < pads.length && n < 2; i++) {
+      var gp = pads[i];
+      if (!gp || !gp.connected) continue;
+      var port = n++;                       /* pad ตัวแรกที่เจอ = P1, ตัวที่สอง = P2 */
+      var st = {};
+      st.B = !!gp.buttons[GP_B] && gp.buttons[GP_B].pressed;
+      st.A = !!gp.buttons[GP_A] && gp.buttons[GP_A].pressed;
+      st.sel = !!gp.buttons[GP_SELECT] && gp.buttons[GP_SELECT].pressed;
+      st.start = !!gp.buttons[GP_START] && gp.buttons[GP_START].pressed;
+      st.left = st.right = st.up = st.down = false;
+      var ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+      if (ax < -0.4) st.left = true; else if (ax > 0.4) st.right = true;
+      if (ay < -0.4) st.up = true; else if (ay > 0.4) st.down = true;
+      for (var db in GP_DPAD) {
+        var btn = gp.buttons[db];
+        if (btn && (btn.pressed || btn.value > 0.5)) st[GP_DPAD[db]] = true;
+      }
+      if (sys) {
+        for (var k in st) {
+          if (gpPrev[port][k] !== st[k]) sys.setButton(port, k, st[k]);
+        }
+      }
+      gpPrev[port] = st;
+    }
+  }
+
+  /* ---------------- main loop ----------------
+   * ใช้ setTimeout ควบคุมจังหวะ 60Hz เอง (ไม่ใช้ rAF) เพราะ:
+   * 1) webview บางสภาพแวดล้อม suspend rAF เมื่อหน้าต่างไม่มี focus → เกมค้าง
+   * 2) จอ 120Hz+ rAF ยิงถี่เกิน → เกม fixed-timestep จะเร็วเกิน 2 เท่า */
+  var last = performance.now(), frames = 0;
+  function loop() {
+    setTimeout(loop, 1000 / 60);
+    pollGamepads();
+    if (!sys) return;
     if (running) sys.frame();
-    /* blit ด้วย scale2x ตามโหมด (ตัว runtime ทำทั้งขั้นตอนใน 1 call ต่อเฟรม) */
     ensureBuffers();
     var ctx = canvas.getContext('2d');
     if (mode === 1) {
       sys.blitTo(img1x);
       offCtx1x.putImageData(img1x, 0, 0);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(off1x, 0, 0, canvas.width, canvas.height); /* upscale แบบ pixelated เต็ม canvas */
+      ctx.drawImage(off1x, 0, 0, canvas.width, canvas.height);
     } else if (mode === 2) {
       sys.blitScale2x(img2x, 2);
       offCtx2x.putImageData(img2x, 0, 0);
       ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(off2x, 0, 0, canvas.width, canvas.height); /* upscale แบบ pixelated เต็ม canvas */
+      ctx.drawImage(off2x, 0, 0, canvas.width, canvas.height);
     } else {
       sys.blitScale2x(img4x, 4);
       ctx.putImageData(img4x, 0, 0);
     }
     frames++;
+    var t = performance.now();
     if (t - last >= 500) {
-      fps = Math.round(frames * 1000 / (t - last));
+      var fps = Math.round(frames * 1000 / (t - last));
       frames = 0; last = t;
       fpsEl.style.width = Math.min(100, fps / 60 * 100) + '%';
       statusEl.textContent = sys.isHalted()
         ? 'HALT at $' + sys.cpu.haltPC.toString(16).toUpperCase() + ' — กด R เพื่อรีสตาร์ท'
-        : 'fps: ' + fps + ' | frame: ' + sys.getFrameCount();
+        : currentGame.title + ' | fps: ' + fps + ' | frame: ' + sys.getFrameCount();
     }
-  })(0);
+  }
+  loop();
+
+  /* ---------------- boot: คืนค่าที่จำไว้ + โหลดเกมล่าสุด ---------------- */
+  if (prefs.mode === 1 || prefs.mode === 2 || prefs.mode === 4) setMode(prefs.mode);
+  if (prefs.wide) setWide(true);
+  renderMenu();
+  var startGame = GAMES[0] || null;
+  for (var gi = 0; gi < GAMES.length; gi++) if (prefs.game && GAMES[gi].id === prefs.game) startGame = GAMES[gi];
+  if (startGame) loadGame(startGame);
 })();
 </script>
 </body>

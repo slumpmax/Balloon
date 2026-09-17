@@ -188,6 +188,7 @@
         this.push8((this.P & 0xEF) | 0x20);
         this.P |= 0x04;
         this.PC = vec;
+        if (rom.nrom128) this.PC = ((this.PC & 0x3FFF) | 0x8000); /* NROM-128: normalize เข้าช่วงที่มี case */
         this.nmi = false; this.irq = false;
       },
       halt: function (pc) { this.halted = true; this.haltPC = pc; msg('CPU halted at $' + pc.toString(16).toUpperCase() + ' (unreachable state)'); },
@@ -615,6 +616,7 @@
 
     // ------------------------------------------------------------ system
     let audioActive = false;
+    let audioCtx = null, audioNode = null;
     let frameCount = 0;
     let blitScratch2 = null, blitScratch4 = null;
 
@@ -624,6 +626,7 @@
         ram.fill(0);
         cpu.A = cpu.X = cpu.Y = 0; cpu.P = 0x24; cpu.SP = 0xFD; cpu.nmi = cpu.irq = false; cpu.halted = false;
         cpu.PC = rom ? rom.vectors.reset : 0x8000;
+        if (rom && rom.nrom128) cpu.PC = ((cpu.PC & 0x3FFF) | 0x8000); /* NROM-128: mirror เข้าช่วงที่มี case */
         ppu.ctrl = ppu.mask = ppu.status = 0; ppu.oamAddr = 0; ppu.w = 0; ppu.v = ppu.t = 0; ppu.fineX = 0; ppu.scrollX = ppu.scrollY = 0;
         ppu.vram.fill(0);
         if (rom) ppu.vram.set(rom.chr.subarray(0, 0x2000), 0);
@@ -686,10 +689,13 @@
         }
       },
       startAudio: function () {
-        if (audioActive || typeof window === 'undefined' || !window.AudioContext) return;
+        if (typeof window === 'undefined' || !window.AudioContext) return;
         try {
+          /* เรียกซ้ำได้ทุกเมื่อ — ถ้ามี context แล้วแค่ resume (unlock หลัง user gesture) */
+          if (audioActive) { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); return; }
           const AC = window.AudioContext || window.webkitAudioContext;
           const ctx = new AC();
+          audioCtx = ctx;
           const node = ctx.createScriptProcessor(4096, 0, 1);
           const buf = new Float32Array(4096);
           node.onaudioprocess = function (e) {
@@ -698,9 +704,15 @@
             out.set(buf);
           };
           node.connect(ctx.destination);
+          audioNode = node;
           audioActive = true;
           if (ctx.state === 'suspended') ctx.resume();
         } catch (err) { msg('audio unavailable: ' + err.message); }
+      },
+      stopAudio: function () {
+        if (audioNode) { try { audioNode.disconnect(); } catch (e) {} audioNode = null; }
+        if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
+        audioActive = false;
       },
       isHalted: function () { return cpu.halted; },
       getFrameCount: function () { return frameCount; },

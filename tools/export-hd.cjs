@@ -16,14 +16,35 @@ const { scale2xIndex, nearestRGBA, indicesToRGBA } = require('./scaler.cjs');
 const { encodeGIF } = require('./gif.cjs');
 
 const GAME_DIR = path.join(__dirname, '..', 'public', 'game');
-const OUT_DIR = path.join(GAME_DIR, 'hd');
-const SHOT_DIR = path.join(OUT_DIR, 'screenshots');
-const SPR_DIR = path.join(OUT_DIR, 'sprites');
 
-const romFile = fs.readdirSync(GAME_DIR).filter(f => f.endsWith('.rom.js'))[0];
-if (!romFile) { console.error('no .rom.js found — run npm run build first'); process.exit(1); }
+/* เลือกเกม: node tools/export-hd.cjs [game-id] — default = balloon-fight-usa */
+const GAME_ID = process.argv[2] || 'balloon-fight-usa';
+const romFile = GAME_ID + '.rom.js';
+if (!fs.existsSync(path.join(GAME_DIR, romFile))) { console.error('rom not found: ' + romFile + ' — run npm run build:' + GAME_ID + ' first'); process.exit(1); }
 const ROM = require(path.join(GAME_DIR, romFile));
 const { createSystem, PALETTE } = require(path.join(__dirname, '..', 'public', 'nes-runtime.js'));
+
+/* ต่อเกม: รูปแบบ composite ของตัวละคร (จากการ calibrate)
+ *  - balloon-fight-usa: ผู้เล่น/ศัตรู = 2x3 tiles (16x24), P1 ที่ slot 8
+ *  - nuts-milk-japan:   ผู้เล่น/ศัตรู = 2x2 tiles (16x16), P1 ที่ slot 8
+ *  - gameSceneScript: ลำดับการขับฉาก (input script + จุดจับภาพ) */
+const GAMES = {
+  'balloon-fight-usa': {
+    compositeW: 16, compositeH: 24, gridW: 2, gridH: 3,
+    scenes: ['title', 'gameplay-1p', 'gameplay-2p', 'balloon-trip'],
+  },
+  'nuts-milk-japan': {
+    compositeW: 16, compositeH: 16, gridW: 2, gridH: 2,
+    scenes: ['title', 'gameplay-1p'],
+    skipP2: true, /* โหมด 2 PLAYER เล่นสลับกัน — ไม่มี P2 บนจอพร้อม P1 */
+  },
+  /* เกมที่ยังไม่ calibrate ตัวละคร — export เฉพาะ title (+GIF) สำหรับ thumbnail เมนู */
+  'baseball-usa-europe': { skipSprites: true, scenes: ['title'] },
+  'kinnikuman-muscle-tag-match-japan': { skipSprites: true, scenes: ['title'] },
+  'soccer-world': { skipSprites: true, scenes: ['title'] },
+};
+const GAME_CFG = GAMES[GAME_ID];
+if (!GAME_CFG) { console.error('no config for game: ' + GAME_ID + ' — เพิ่มใน GAMES ก่อน'); process.exit(1); }
 
 /* ------------------------------------------------------------ helpers */
 function boot() { return createSystem({ rom: ROM, headless: true }); }
@@ -59,40 +80,45 @@ function activeSprites(sys) {
   return out;
 }
 
-/* cluster consecutive OAM slots into 2x3-tile (16x24) composites (players/enemies) */
+/* cluster consecutive OAM slots into tile-grid composites (players/enemies)
+ * ขนาด grid ต่อเกม (gridW x gridH tiles) จากค่าที่ calibrate ไว้ */
 function findComposites(sys) {
   const act = activeSprites(sys);
   const bySlot = new Map(act.map(s => [s.i, s]));
   const groups = [];
-  for (let i = 0; i <= 58; i++) {
+  const GW = GAME_CFG.gridW, GH = GAME_CFG.gridH, need = GW * GH;
+  for (let i = 0; i <= 64 - need; i++) {
     if (!bySlot.has(i)) continue;
     const base = bySlot.get(i);
     const cells = [];
     let ok = true;
-    for (let k = 0; k < 6; k++) {
+    for (let k = 0; k < need; k++) {
       const s = bySlot.get(i + k);
       const cx = s ? s.x - base.x : -1;
       const cy = s ? s.y - base.y : -1;
-      if (!s || (cx !== 0 && cx !== 8) || (cy !== 0 && cy !== 8 && cy !== 16)) { ok = false; break; }
+      const gxOk = GW === 2 ? (cx === 0 || cx === 8) : cx === 0;
+      const gyOk = GH === 3 ? (cy === 0 || cy === 8 || cy === 16) : (cy === 0 || cy === 8);
+      if (!s || !gxOk || !gyOk) { ok = false; break; }
       cells.push(s);
     }
     if (!ok) continue;
-    /* all six cells must exist exactly once on the 2x3 grid */
+    /* all cells must exist exactly once on the grid */
     const seen = new Set(cells.map(s => `${s.x - base.x},${s.y - base.y}`));
-    if (seen.size !== 6) continue;
+    if (seen.size !== need) continue;
     /* a real character composite shares one sub-palette (verified by calibration) */
     if (cells.some(s => (s.attr & 3) !== (base.attr & 3))) continue;
     groups.push({ firstSlot: i, x: base.x, y: base.y, cells });
-    i += 5;
+    i += need - 1;
   }
   return groups;
 }
 
-/* cut a 16x24 composite into RGBA (transparent background), painting NES order:
+/* cut a WxH composite into RGBA (transparent background), painting NES order:
  * lower OAM index = on top, so paint from highest index first */
 function cutComposite(sys, g) {
   const vram = sys.ppu.vram;
-  const rgba = new Uint8Array(16 * 24 * 4);
+  const CW = GAME_CFG.compositeW, CH = GAME_CFG.compositeH;
+  const rgba = new Uint8Array(CW * CH * 4);
   const order = g.cells.slice().sort((a, b) => b.i - a.i);
   const spPat = (sys.ppu.ctrl & 0x08) ? 0x1000 : 0;
   for (const s of order) {
@@ -103,7 +129,7 @@ function cutComposite(sys, g) {
       const cy = s.y + dy - g.y, t0 = vram[chr + (flipV ? 7 - dy : dy)], t1 = vram[chr + 8 + (flipV ? 7 - dy : dy)];
       for (let dx = 0; dx < 8; dx++) {
         const cx = s.x + dx - g.x;
-        if (cx < 0 || cx > 15 || cy < 0 || cy > 23) continue;
+        if (cx < 0 || cx >= CW || cy < 0 || cy >= CH) continue;
         const bit = flipH ? dx : 7 - dx;
         const pv = ((t0 >> bit) & 1) | (((t1 >> bit) & 1) << 1);
         if (pv === 0) continue;
@@ -124,7 +150,7 @@ function addPose(store, sys, g, cap) {
   const rgba = cutComposite(sys, g);
   let opaque = 0;
   for (let i = 3; i < rgba.length; i += 4) if (rgba[i] === 255) opaque++;
-  if (opaque < 16 * 24 * 0.12) return;
+  if (opaque < GAME_CFG.compositeW * GAME_CFG.compositeH * 0.12) return;
   const k = poseKey(g);
   const e = store.get(k);
   if (e) e.count++;
@@ -134,9 +160,10 @@ function addPose(store, sys, g, cap) {
 const P1_SLOT = 8;  /* calibration: P1 composite always occupies OAM slots 8-13 */
 /* P2 = slot 14 เมื่อเข้าเกมด้วย Select x1 -> Start (ตรวจซ้ำแบบ dynamic ตอน runtime) */
 
-/* scale a 16x24 RGBA cutout by 4x (nearest) and write */
-function writeCutout(file, rgba, w, h) {
-  let s = nearestRGBA(rgba, w, h);
+/* scale a WxH RGBA cutout by 4x (nearest) and write */
+function writeCutout(file, rgba) {
+  const CW = GAME_CFG.compositeW, CH = GAME_CFG.compositeH;
+  let s = nearestRGBA(rgba, CW, CH);
   s = nearestRGBA(s.data, s.w, s.h);
   fs.writeFileSync(file, encodePNG(s.w, s.h, s.data));
   return s;
@@ -144,13 +171,13 @@ function writeCutout(file, rgba, w, h) {
 
 function writeSheet(dir, name, poses, perRow) {
   if (!poses.length) return null;
-  const tileW = 64, tileH = 96;
+  const tileW = GAME_CFG.compositeW * 4, tileH = GAME_CFG.compositeH * 4;
   const rows = Math.ceil(poses.length / perRow);
   const W = perRow * tileW, H = rows * tileH;
   const out = new Uint8Array(W * H * 4); /* fully transparent */
   poses.forEach((p, n) => {
     const gx = (n % perRow) * tileW, gy = Math.floor(n / perRow) * tileH;
-    const big = nearestRGBA(nearestRGBA(p.rgba, 16, 24).data, 32, 48).data; /* scale 16x24 -> 64x96 */
+    const big = nearestRGBA(nearestRGBA(p.rgba, GAME_CFG.compositeW, GAME_CFG.compositeH).data, GAME_CFG.compositeW * 2, GAME_CFG.compositeH * 2).data; /* scale -> 4x */
     for (let y = 0; y < tileH; y++) for (let x = 0; x < tileW; x++) {
       const s = (y * tileW + x) * 4, d = ((gy + y) * W + gx + x) * 4;
       out[d] = big[s]; out[d + 1] = big[s + 1]; out[d + 2] = big[s + 2]; out[d + 3] = big[s + 3];
@@ -162,52 +189,54 @@ function writeSheet(dir, name, poses, perRow) {
 }
 
 /* ------------------------------------------------------------ 1. scenes */
+const OUT_DIR = path.join(GAME_DIR, 'hd', GAME_ID);
+const SHOT_DIR = path.join(OUT_DIR, 'screenshots');
+const SPR_DIR = path.join(OUT_DIR, 'sprites');
 fs.mkdirSync(SHOT_DIR, { recursive: true });
 fs.mkdirSync(SPR_DIR, { recursive: true });
-const manifest = { game: romFile.replace(/\.rom\.js$/, ''), mode: 'scale2x x2 = 4x (nearest-pixel, palette-index domain)', scenes: [], sprites: {} };
+const manifest = { game: GAME_ID, mode: 'scale2x x2 = 4x (nearest-pixel, palette-index domain)', scenes: [], sprites: {} };
 
 function titleTo(sys) { for (let i = 0; i < 240; i++) sys.frame(); }
 
-console.log('[1/5] title screen...');
-{
-  const sys = boot(); titleTo(sys);
-  manifest.scenes.push(scenePNG(sys, 'title.png', snapIndex(sys)));
-}
+/* ลำดับฉากต่อเกม — ทำงานตามชื่อที่ประกาศใน GAME_CFG.scenes */
+const SCENE_RUNNERS = {
+  title(sys) { titleTo(sys); return scenePNG(sys, 'title.png', snapIndex(sys)); },
+  'gameplay-1p'(sys) {
+    titleTo(sys);
+    press(sys, 0, 'start', 5);
+    for (let i = 0; i < 90; i++) sys.frame();
+    return scenePNG(sys, 'gameplay-1p.png', snapIndex(sys));
+  },
+  'gameplay-2p'(sys) {
+    titleTo(sys);
+    press(sys, 0, 'sel', 5);
+    for (let i = 0; i < 10; i++) sys.frame();
+    press(sys, 0, 'start', 5);
+    for (let i = 0; i < 90; i++) sys.frame();
+    return scenePNG(sys, 'gameplay-2p.png', snapIndex(sys));
+  },
+  'balloon-trip'(sys) {
+    titleTo(sys);
+    press(sys, 0, 'sel', 5);
+    for (let i = 0; i < 10; i++) sys.frame();
+    press(sys, 0, 'sel', 5);
+    for (let i = 0; i < 10; i++) sys.frame();
+    press(sys, 0, 'start', 5);
+    for (let i = 0; i < 110; i++) sys.frame();
+    return scenePNG(sys, 'balloon-trip.png', snapIndex(sys));
+  },
+};
 
-console.log('[2/5] gameplay 1P...');
-{
-  const sys = boot(); titleTo(sys);
-  press(sys, 0, 'start', 5);
-  for (let i = 0; i < 90; i++) sys.frame(); /* spawn (~f10) + HUD ล่างเสร็จ */
-  manifest.scenes.push(scenePNG(sys, 'gameplay-1p.png', snapIndex(sys)));
-}
-
-console.log('[3/5] gameplay 2P (Select x1 -> Start = โหมด 2 ผู้เล่น)...');
-{
-  const sys = boot(); titleTo(sys);
-  press(sys, 0, 'sel', 5);
-  for (let i = 0; i < 10; i++) sys.frame();
-  press(sys, 0, 'start', 5);
-  for (let i = 0; i < 90; i++) sys.frame(); /* spawn ทั้งคู่ (P1 x~32, P2 x~208) */
-  manifest.scenes.push(scenePNG(sys, 'gameplay-2p.png', snapIndex(sys)));
-}
-
-console.log('[4/5] balloon trip (Select x2 -> Start)...');
-{
-  const sys = boot(); titleTo(sys);
-  press(sys, 0, 'sel', 5);
-  for (let i = 0; i < 10; i++) sys.frame();
-  press(sys, 0, 'sel', 5);
-  for (let i = 0; i < 10; i++) sys.frame();
-  press(sys, 0, 'start', 5);
-  for (let i = 0; i < 110; i++) sys.frame();
-  const nAct = activeSprites(sys).length;
-  manifest.scenes.push(scenePNG(sys, 'balloon-trip.png', snapIndex(sys)));
-  if (nAct === 0) console.log('  (เตือน: balloon trip ไม่มีสไปรต์แอคทีฟ ณ เฟรมจับ — ตรวจภาพด้วยตาอีกครั้ง)');
+console.log(`[game: ${GAME_ID}] exporting ${GAME_CFG.scenes.length} scenes...`);
+for (const scene of GAME_CFG.scenes) {
+  const sys = boot();
+  const runner = SCENE_RUNNERS[scene];
+  if (!runner) { console.log('  (ข้าม — ไม่มี runner สำหรับฉาก "' + scene + '")'); continue; }
+  manifest.scenes.push(runner(sys));
 }
 
 /* ------------------------------------------------------------ 2. attract demo GIF */
-console.log('[5/5] attract demo GIF...');
+console.log('[GIF] attract demo...');
 {
   const sys = boot();
   titleTo(sys);
@@ -234,18 +263,42 @@ console.log('[5/5] attract demo GIF...');
 function bufEq(a, b) { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; }
 
 /* ------------------------------------------------------------ 3. character cutouts */
+/* ทัวร์ท่าทางต่อเกม (จากการ calibrate) */
+const TOURS = {
+  'balloon-fight-usa': {
+    p1: [
+      { idle: 60 }, { right: 60 }, { idle: 30 },
+      { B: 50 }, { right: 30, B: 50 }, { idle: 40 },
+      { left: 60 }, { B: 60 }, { left: 40, B: 60 }, { idle: 40 },
+    ],
+    p2: [{ idle: 60 }, { left: 20 }, { B: 40 }, { idle: 30 }],
+    enter2p(sys) { press(sys, 0, 'sel', 5); for (let i = 0; i < 10; i++) sys.frame(); press(sys, 0, 'start', 5); for (let i = 0; i < 60; i++) sys.frame(); },
+    p2Finder(g) { return g.firstSlot !== P1_SLOT && g.x > 100; },
+  },
+  'nuts-milk-japan': {
+    p1: [
+      { idle: 60 }, { right: 60 }, { idle: 30 },
+      { A: 50 }, { right: 30, A: 50 }, { idle: 40 },
+      { left: 60 }, { left: 40, A: 60 }, { idle: 40 },
+    ],
+    p2: [{ idle: 40 }, { left: 20 }, { A: 30 }, { idle: 30 }],
+    enter2p(sys) { /* N&M: ผู้เล่น 2 กด Start ที่ port2 ระหว่างเกม */ press(sys, 1, 'start', 5); for (let i = 0; i < 60; i++) sys.frame(); },
+    p2Finder(g) { return g.firstSlot !== P1_SLOT; },
+  },
+};
+const TOUR = TOURS[GAME_ID] || TOURS['balloon-fight-usa'];
+
+if (GAME_CFG.skipSprites) {
+  console.log('characters: (ข้าม — skipSprites: เกมนี้ยังไม่ calibrate ตัวละคร)');
+}
+if (!GAME_CFG.skipSprites) {
+
 console.log('characters: motion tour (1P)...');
 const p1 = new Map(), en = new Map();
 {
   const sys = boot(); titleTo(sys);
   press(sys, 0, 'start', 5);
-  /* ทัวร์ท่าทาง: idle -> เดินขวา -> ลอย (B) -> ลอย+เดิน -> เดินซ้าย -> ลอยกลางอากาศ */
-  const script = [
-    { idle: 60 }, { right: 60 }, { idle: 30 },
-    { B: 50 }, { right: 30, B: 50 }, { idle: 40 },
-    { left: 60 }, { B: 60 }, { left: 40, B: 60 }, { idle: 40 },
-  ];
-  for (const seg of script) {
+  for (const seg of TOUR.p1) {
     const held = Object.keys(seg).filter(k => k !== 'idle');
     for (const k of held) sys.setButton(0, k, true);
     for (let i = 0; i < (seg.idle || 60); i++) {
@@ -258,23 +311,21 @@ const p1 = new Map(), en = new Map();
   }
 }
 
-console.log('characters: P2 tour (Select x1 -> Start)...');
+console.log('characters: P2 tour...');
 const p2 = new Map();
-{
+if (GAME_CFG.skipP2) {
+  console.log('  (ข้าม — เกมนี้ไม่มี P2 พร้อมกันบนจอ)');
+} else {
   const sys = boot(); titleTo(sys);
-  press(sys, 0, 'sel', 5);
-  for (let i = 0; i < 10; i++) sys.frame();
   press(sys, 0, 'start', 5);
   for (let i = 0; i < 60; i++) sys.frame();
-  /* P2 = composite ที่อยู่ครึ่งจอขวา (calibration: slot 14, x~208, pal ต่างจาก P1) */
+  TOUR.enter2p(sys);
   let p2Slot = -1;
   for (const g of findComposites(sys)) {
-    if (g.firstSlot !== P1_SLOT && g.x > 100) { p2Slot = g.firstSlot; break; }
+    if (TOUR.p2Finder(g)) { p2Slot = g.firstSlot; break; }
   }
   console.log('  P2 slot =', p2Slot, p2Slot >= 0 ? '(พบ 2 ผู้เล่น)' : '(ตรวจไม่พบ — ไม่มี P2 sheet)');
-  /* ทัวร์ท่าทาง P2 แบบเบามือ (เริ่ม x~208 ใกล้ขอบขวา — เดินซ้าย/ลอยเท่านั้น) */
-  const script = [{ idle: 60 }, { left: 20 }, { B: 40 }, { idle: 30 }];
-  for (const seg of script) {
+  for (const seg of TOUR.p2) {
     const held = Object.keys(seg).filter(k => k !== 'idle');
     for (const k of held) sys.setButton(1, k, true);
     for (let i = 0; i < (seg.idle || 60); i++) {
@@ -296,9 +347,10 @@ function emitPoses(dir, store, prefix, group) {
   const entries = [];
   list.forEach((p, n) => {
     const file = `${prefix}-pose${String(n + 1).padStart(2, '0')}.png`;
-    const s = writeCutout(path.join(dir, file), p.rgba, 16, 24);
+    const s = writeCutout(path.join(dir, file), p.rgba);
     entries.push({ file, w: s.w, h: s.h, oamTiles: p.key.split('|').map(t => '0x' + t.split('.')[0]).join(','), occurrences: p.count });
   });
+  if (!list.length) { console.log(`  ${group}: (ไม่มี pose — ข้าม)`); return; }
   const sheet = writeSheet(dir, `${prefix}-sheet.png`, list, 8);
   manifest.sprites[group] = { poses: entries.length, sheet, files: entries };
   console.log(`  ${group}: ${entries.length} poses, sheet ${sheet ? sheet.w + 'x' + sheet.h : '-'}`);
@@ -307,6 +359,9 @@ emitPoses(SPR_DIR, p1, 'player1', 'player1');
 emitPoses(SPR_DIR, p2, 'player2', 'player2');
 emitPoses(SPR_DIR, en, 'enemy', 'enemy');
 
+} /* end !skipSprites */
+
 fs.writeFileSync(path.join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));
+console.log('game:', GAME_ID, '| composite:', GAME_CFG.compositeW + 'x' + GAME_CFG.compositeH);
 console.log('done ->', path.relative(process.cwd(), OUT_DIR));
 for (const s of manifest.scenes) console.log('  ', s.file, s.w ? `${s.w}x${s.h}` : `${s.frames} frames`);

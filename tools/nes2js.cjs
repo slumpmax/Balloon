@@ -59,60 +59,12 @@ function opName(mode, b1, w) {
 }
 
 function scanROM(prg) {
-  const reset = readU16(prg, 0xFFFC);
-  const nmi = readU16(prg, 0xFFFA);
-  const irq = readU16(prg, 0xFFFE);
-  const seen = new Set();
-  const order = [];
-  const stack = [];
-
-  const add = (pc) => {
-    if (pc < 0x8000 || pc > 0xFFFF) return;
-    stack.push(pc);
+  /* อ่านเฉพาะ vectors — ตัว emit ใช้ "ทุก address = 1 instruction" แล้ว จึงไม่ต้อง flow-scan */
+  return {
+    reset: readU16(prg, 0xFFFC),
+    nmi: readU16(prg, 0xFFFA),
+    irq: readU16(prg, 0xFFFE),
   };
-  add(reset); add(nmi); add(irq);
-
-  let barrier = 0;
-  while (stack.length && barrier++ < 200000) {
-      let pc = stack.pop();
-      if (pc < 0x8000 || pc > 0xFFFF) continue;
-      walk: while (pc >= 0x8000 && pc <= 0xFFFF) {
-        if (seen.has(pc)) break;
-        seen.add(pc);
-        order.push(pc);
-        const op = readU8(prg, pc);
-        const info = INFO[op];
-        const size = MODE_SIZE[info.mode];
-        if (pc + size > 0x10000) break;
-        const b1 = size >= 2 ? readU8(prg, pc + 1) : 0;
-        const w = size >= 3 ? (b1 | (readU8(prg, pc + 2) << 8)) : 0;
-        if (info.mode === 'rel') { add((pc + 2 + b1) & 0xFFFF); add((pc + 2) & 0xFFFF); break walk; } // both directions
-        switch (info.mnem) {
-          case 'JSR': add(w & 0xFFFF); break;
-          case 'JMP':
-            if (info.mode === 'abs') add(w & 0xFFFF);
-            break walk;
-          case 'RTS': case 'RTI': case 'BRK': break walk; // dynamic flow
-          default: break;
-        }
-        pc += size;
-      }
-    }
-  order.sort((a, b) => a - b);
-  return { seen: order, reset, nmi, irq };
-}
-
-function linearScan(prg) {
-  const s = [];
-  let pc = 0x8000;
-  while (pc <= 0xFFFF) {
-    s.push(pc);
-    const info = INFO[readU8(prg, pc)];
-    const size = MODE_SIZE[info.mode];
-    if (pc + size > 0x10000) break;
-    pc += size;
-  }
-  return s;
 }
 
 // ---------------------------------------------------------------- code emitter
@@ -303,8 +255,12 @@ function emitInstruction(mnem, mode, cyc, pc0, b1, w) {
 }
 
 // ---------------------------------------------------------------- build
-function generate(prg, reset, nmi, irq, order) {
-  const cases = [];
+function generate(prg, order) {
+  /* emit เป็น function ต่อ page (256 address/page, switch บน PC & 0xFF)
+     — switch 16K entries เดียว V8 ไม่สร้าง jump table และ deoptimize เป็นการไล่เทียบ
+     ทำให้เกมช้ามาก; switch 256 entries ต่อ function optimize เป็น jump table ได้
+     และ dispatch หลักเป็น F0[pc>>8] ซึ่งเร็วคงที่ */
+  const byPage = new Map();
   for (const pc of order) {
     const op = readU8(prg, pc);
     const info = INFO[op];
@@ -314,9 +270,15 @@ function generate(prg, reset, nmi, irq, order) {
     const w = size >= 3 ? (b1 | (readU8(prg, pc + 2) << 8)) : 0;
     const operandTxt = (mode === 'imp' || mode === 'acc') ? '' : ' ' + opName(mode, b1, w);
     const body = emitInstruction(info.mnem, mode, info.cyc, pc, b1, w).join(';');
-    cases.push('      case ' + hex4(pc) + ': { /* ' + pc.toString(16).toUpperCase() + ': ' + info.mnem + operandTxt + ' */' + body + '; } break;');
+    const page = pc >> 8;
+    if (!byPage.has(page)) byPage.set(page, []);
+    byPage.get(page).push('          case ' + hex2(pc & 0xFF) + ': { /* ' + pc.toString(16).toUpperCase() + ': ' + info.mnem + operandTxt + ' */' + body + '; } break;');
   }
-  return cases.join('\n');
+  const fns = [];
+  for (const [page, lines] of [...byPage.entries()].sort((a, b) => a[0] - b[0])) {
+    fns.push('    ' + hex2(page) + ': function () {\n      var t;\n      switch (R.PC & 0xFF) {\n' + lines.join('\n') + '\n      }\n    }');
+  }
+  return fns.join(',\n');
 }
 
 function disasm(prg) {
@@ -352,38 +314,48 @@ function main() {
     console.warn('WARNING: ' + rom.prgBanks + ' PRG banks (NROM expected 1); runtime assumes 16KB PRG.');
   }
 
+  /* ทุก address เป็นจุดเริ่ม instruction ที่ decode ได้ (ตาราง 256 opcodes ครบ)
+     — ตามฮาร์ดแวร์ 6502: CPU ที่กระโดดไป address ใดก็ decode จากจุดนั้นเสมอ
+     การมี case ครบทุก address จึงไม่มี unreachable state อีกต่อไป
+     NROM-128: generate เฉพาะ $8000-$BFFF แล้ว normalize PC ด้วย mirror ตอน execute */
+  const NROM128 = rom.prg.length <= 0x4000;
+  const allAddrs = [];
+  const aEnd = NROM128 ? 0xBFFF : 0xFFFF;
+  for (let a = 0x8000; a <= aEnd; a++) allAddrs.push(a);
   const scan = scanROM(rom.prg);
-  const lin = linearScan(rom.prg);
-  const mergedSet = new Set(scan.seen);
-  for (const a of lin) mergedSet.add(a);
-  const code = generate(rom.prg, scan.reset, scan.nmi, scan.irq, Array.from(mergedSet).sort((a, b) => a - b));
+  const code = generate(rom.prg, allAddrs);
 
   const name = path.basename(romPath, '.nes').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
-  // global key used for the in-pipeline runtime
-  const GKEY = 'BALLOON_FIGHT';
+  /* global key derive จากชื่อไฟล์ (เช่น 'nuts-&-milk-japan' -> NUTS_MILK_JAPAN)
+     เกมละ key ของตัวเอง จึงโหลดหลาย .rom.js ในหน้าเดียวกันได้ */
+  const GKEY = name.toUpperCase().replace(/-/g, '_');
 
   const romJs = `/* Generated by nes2js.cjs from ${path.basename(romPath)} — do not edit */
-/* ${Array.from(mergedSet).length} instructions transpiled from 6502 machine code */
+/* ${allAddrs.length} instructions transpiled from 6502 machine code (ทุก address ใน ${NROM128 ? '$8000-$BFFF (NROM-128, PC mirrored)' : '$8000-$FFFF'} ) */
 (function (g) {
   var ROM = g['${GKEY}'] || (g['${GKEY}'] = {});
   ROM.name = '${name}';
   ROM.mapper = ${rom.mapper};
   ROM.mirror = ${rom.mirrorVertical ? 'true' : 'false'};      // mirrorVertical
+  ROM.nrom128 = ${NROM128 ? 'true' : 'false'};
   ROM.vectors = { reset: 0x${scan.reset.toString(16).padStart(4, '0')}, nmi: 0x${scan.nmi.toString(16).padStart(4, '0')}, irq: 0x${scan.irq.toString(16).padStart(4, '0')} };
   ROM.prg = new Uint8Array([${Array.from(rom.prg).join(',')}]);
   ROM.chr = new Uint8Array([${Array.from(rom.chr).join(',')}]);
+  /* dispatch เป็นตาราง function ต่อ page (F0[pc>>8]) — switch เดี่ยว 16K entries
+     ทำให้ V8 deoptimize (ไล่เทียบเชิงเส้นทุก instruction) เกมจึงช้ามาก
+     switch 256 entries ต่อ page function optimize เป็น jump table ได้ */
   ROM.buildExec = function (R) {
-    return function exec() {
-      var t;
-      while (true) {
-        switch (R.PC) {
+    var F0 = {
 ${code}
-          default:
-            R.halt(R.PC);
-            return;
-        }
+    };
+    return function exec() {
+      for (;;) {
+        var fn = F0[${NROM128 ? '(R.PC >> 8) & 0x3F | 0x80' : 'R.PC >> 8'}];
+        if (!fn) { R.halt(R.PC); return; }
+        fn();
+        if (R.fb) return; /* frame boundary — จบเฟรมที่นี่ (return ใน page fn ออกแค่จาก page) */
       }
     };
   };
@@ -416,11 +388,11 @@ ${code}
     chrBanks: rom.chrBanks,
     mirrorVertical: rom.mirrorVertical,
     vectors: scan,
-    instructionsTranspiled: Array.from(mergedSet).length,
+    instructionsTranspiled: allAddrs.length,
     generated: new Date().toISOString(),
   };
-  fs.writeFileSync(path.join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));
-  console.log('OK: ' + name + ' -> ' + Array.from(mergedSet).length + ' instructions, ' + rom.prg.length + 'B PRG, ' + rom.chr.length + 'B CHR');
+  fs.writeFileSync(path.join(OUT_DIR, name + '.manifest.json'), JSON.stringify(manifest, null, 2));
+  console.log('OK: ' + name + ' -> ' + allAddrs.length + ' instructions, ' + rom.prg.length + 'B PRG, ' + rom.chr.length + 'B CHR');
 }
 
 if (require.main === module) main();

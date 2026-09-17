@@ -1,0 +1,250 @@
+{
+  "game": "nuts-milk-japan",
+  "mode": "scale2x x2 = 4x (nearest-pixel, palette-index domain)",
+  "scenes": [
+    {
+      "file": "title.png",
+      "w": 1024,
+      "h": 960
+    },
+    {
+      "file": "gameplay-1p.png",
+      "w": 1024,
+      "h": 960
+    },
+    {
+      "file": "attract-demo.gif",
+      "frames": 210,
+      "w": 512,
+      "h": 480,
+      "bytes": 2139114
+    }
+  ],
+  "sprites": {
+    "player1": {
+      "poses": 10,
+      "sheet": {
+        "file": "player1-sheet.png",
+        "w": 512,
+        "h": 128,
+        "poses": 10
+      },
+      "files": [
+        {
+          "file": "player1-pose01.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x4c,0x4d,0x5d,0x5c",
+          "occurrences": 1
+        },
+        {
+          "file": "player1-pose02.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x4e,0x4f,0x5f,0x5e",
+          "occurrences": 36
+        },
+        {
+          "file": "player1-pose03.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x6c,0x6d,0x7d,0x7c",
+          "occurrences": 30
+        },
+        {
+          "file": "player1-pose04.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x86,0x87,0x97,0x96",
+          "occurrences": 54
+        },
+        {
+          "file": "player1-pose05.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa0,0xa1,0xb1,0xb0",
+          "occurrences": 8
+        },
+        {
+          "file": "player1-pose06.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa2,0xa3,0xb3,0xb2",
+          "occurrences": 37
+        },
+        {
+          "file": "player1-pose07.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa4,0xa5,0xb5,0xb4",
+          "occurrences": 7
+        },
+        {
+          "file": "player1-pose08.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa6,0xa7,0xb7,0xb6",
+          "occurrences": 7
+        },
+        {
+          "file": "player1-pose09.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xac,0xad,0xbd,0xbc",
+          "occurrences": 1
+        },
+        {
+          "file": "player1-pose10.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xae,0xaf,0xbf,0xbe",
+          "occurrences": 1
+        }
+      ]
+    },
+    "enemy": {
+      "poses": 19,
+      "sheet": {
+        "file": "enemy-sheet.png",
+        "w": 512,
+        "h": 192,
+        "poses": 19
+      },
+      "files": [
+        {
+          "file": "enemy-pose01.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x80,0x81,0x91,0x90",
+          "occurrences": 12
+        },
+        {
+          "file": "enemy-pose02.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x82,0x83,0x93,0x92",
+          "occurrences": 14
+        },
+        {
+          "file": "enemy-pose03.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x84,0x85,0x95,0x94",
+          "occurrences": 10
+        },
+        {
+          "file": "enemy-pose04.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x86,0x87,0x97,0x96",
+          "occurrences": 63
+        },
+        {
+          "file": "enemy-pose05.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x88,0x89,0x99,0x98",
+          "occurrences": 8
+        },
+        {
+          "file": "enemy-pose06.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x8a,0x8b,0x9b,0x9a",
+          "occurrences": 10
+        },
+        {
+          "file": "enemy-pose07.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x8c,0x8d,0x9d,0x9c",
+          "occurrences": 10
+        },
+        {
+          "file": "enemy-pose08.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0x8e,0x8f,0x9f,0x9e",
+          "occurrences": 5
+        },
+        {
+          "file": "enemy-pose09.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa0,0xa1,0xb1,0xb0",
+          "occurrences": 3
+        },
+        {
+          "file": "enemy-pose10.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa2,0xa3,0xb3,0xb2",
+          "occurrences": 6
+        },
+        {
+          "file": "enemy-pose11.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa4,0xa5,0xb5,0xb4",
+          "occurrences": 4
+        },
+        {
+          "file": "enemy-pose12.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa6,0xa7,0xb7,0xb6",
+          "occurrences": 37
+        },
+        {
+          "file": "enemy-pose13.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xa8,0xa9,0xb9,0xb8",
+          "occurrences": 16
+        },
+        {
+          "file": "enemy-pose14.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xaa,0xab,0xbb,0xba",
+          "occurrences": 8
+        },
+        {
+          "file": "enemy-pose15.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xac,0xad,0xbd,0xbc",
+          "occurrences": 16
+        },
+        {
+          "file": "enemy-pose16.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xae,0xaf,0xbf,0xbe",
+          "occurrences": 7
+        },
+        {
+          "file": "enemy-pose17.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xc,0xd,0x1d,0x1c",
+          "occurrences": 458
+        },
+        {
+          "file": "enemy-pose18.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xc0,0xc1,0xd1,0xd0",
+          "occurrences": 229
+        },
+        {
+          "file": "enemy-pose19.png",
+          "w": 64,
+          "h": 64,
+          "oamTiles": "0xe,0xf,0x1f,0x1e",
+          "occurrences": 229
+        }
+      ]
+    }
+  }
+}

@@ -5,11 +5,16 @@
   "description": "Convert Balloon Fight .nes into web-playable JS code + resources (6502->JS transpilation)",
   "scripts": {
     "build": "node tools/nes2js.cjs public/game \"roms/Balloon Fight (USA).nes\"",
+    "build:bf": "node tools/nes2js.cjs public/game \"roms/Balloon Fight (USA).nes\"",
+    "build:nm": "node tools/nes2js.cjs public/game \"roms/Nuts & Milk (Japan).nes\"",
     "build:here": "node tools/nes2js.cjs public/game",
     "smoke": "node tools/smoke.cjs",
     "export:sprites": "node tools/export-sprites.cjs",
     "export:hd": "node tools/export-hd.cjs",
-    "serve": "npx serve public -l 8080"
+    "serve": "npx serve public -l 8080",
+    "build:bb": "node tools/nes2js.cjs public/game \"roms/Baseball (USA, Europe).nes\"",
+    "build:km": "node tools/nes2js.cjs public/game \"roms/Kinnikuman - Muscle Tag Match (Japan).nes\"",
+    "build:sc": "node tools/nes2js.cjs public/game \"roms/Soccer (World).nes\""
   },
   "devDependencies": {}
 }

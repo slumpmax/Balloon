@@ -1,0 +1,15 @@
+{
+  "game": "nuts-milk-japan",
+  "source": "Nuts & Milk (Japan).nes",
+  "mapper": 0,
+  "prgBanks": 1,
+  "chrBanks": 1,
+  "mirrorVertical": true,
+  "vectors": {
+    "reset": 49152,
+    "nmi": 49344,
+    "irq": 65529
+  },
+  "instructionsTranspiled": 16384,
+  "generated": "2026-09-17T14:13:09.448Z"
+}

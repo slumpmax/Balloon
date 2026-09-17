@@ -1,0 +1,15 @@
+{
+  "game": "soccer-world",
+  "source": "Soccer (World).nes",
+  "mapper": 0,
+  "prgBanks": 2,
+  "chrBanks": 1,
+  "mirrorVertical": true,
+  "vectors": {
+    "reset": 32768,
+    "nmi": 32927,
+    "irq": 32768
+  },
+  "instructionsTranspiled": 32768,
+  "generated": "2026-09-17T14:13:13.728Z"
+}

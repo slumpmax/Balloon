@@ -1,0 +1,15 @@
+{
+  "game": "balloon-fight-usa",
+  "source": "Balloon Fight (USA).nes",
+  "mapper": 0,
+  "prgBanks": 1,
+  "chrBanks": 1,
+  "mirrorVertical": false,
+  "vectors": {
+    "reset": 49152,
+    "nmi": 49300,
+    "irq": 49399
+  },
+  "instructionsTranspiled": 16384,
+  "generated": "2026-09-17T14:13:08.103Z"
+}

@@ -1,0 +1,19 @@
+{
+  "game": "soccer-world",
+  "mode": "scale2x x2 = 4x (nearest-pixel, palette-index domain)",
+  "scenes": [
+    {
+      "file": "title.png",
+      "w": 1024,
+      "h": 960
+    },
+    {
+      "file": "attract-demo.gif",
+      "frames": 107,
+      "w": 512,
+      "h": 480,
+      "bytes": 690720
+    }
+  ],
+  "sprites": {}
+}

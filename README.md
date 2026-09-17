@@ -1,35 +1,62 @@
-# Balloon Fight — NES → Web (6502 → JS, ไม่ใช้ emulator)
+# NES2JS — เล่นเกม NES หลายเกมบนเว็บ (6502 → JS, ไม่ใช้ emulator)
 
-แปลง `Balloon Fight (USA).nes` ให้เล่นในเบราว์เซอร์ โดย **แปลงทุกคำสั่ง 6502 ใน ROM เป็นโค้ด JavaScript จริง** แล้วเสริมชั้น runtime
-ขั้นต่ำสำหรับ PPU / APU / ระบบหน่วยความจำ (Mapper 0 / NROM) ซึ่งไม่สามารถตัดออกได้
+แปลงไฟล์ `.nes` (Mapper 0 / NROM) ให้เล่นในเบราว์เซอร์ โดย **แปลงทุกคำสั่ง 6502 ใน ROM เป็นโค้ด JavaScript จริง** แล้วเสริมชั้น runtime
+ขั้นต่ำสำหรับ PPU / APU / ระบบหน่วยความจำ ซึ่งไม่สามารถตัดออกได้ — ปัจจุบันมีในระบบ:
+
+| เกม | id |
+|---|---|
+| Balloon Fight (USA) | `balloon-fight-usa` |
+| Nuts & Milk (Japan) | `nuts-milk-japan` |
+| Baseball (USA, Europe) | `baseball-usa-europe` |
+| Kinnikuman — Muscle Tag Match (Japan) | `kinnikuman-muscle-tag-match-japan` |
+| Soccer (World) | `soccer-world` |
 
 ## ใช้งาน
 
 ```powershell
 npm install          # (ไม่มี dependency — ได้แค่ convenience)
-npm run build        # อ่าน ROM -> generate public/game/*.rom.js + resources + disasm + manifest
-npm run smoke        # ทดสอบ headless ใน Node รันเกมหลายร้อยเฟรม แล้ว dump เฟรมเป็น ASCII
-npm run export:sprites  # export ไทล์ CHR ทั้งหมดเป็น PNG sprite sheet (ดูหมายเหตุท้าย)
-npm run export:hd      # ส่งออกฉาก + ตัวละครเป็นภาพ HD 1024x960 (Scale2x) + GIF attract demo
+npm run build:bf     # แปลง Balloon Fight (build:nm/bb/km/sc = เกมอื่น ๆ)
+npm run smoke        # ทดสอบ headless (เลือกเกมได้: node tools/smoke.cjs 300 soccer-world)
+npm run export:sprites  # export ไทล์ CHR เป็น PNG sprite sheet (node tools/export-sprites.cjs <game-id>)
+npm run export:hd      # ส่งออกฉาก + ตัวละคร HD (node tools/export-hd.cjs <game-id>, default balloon-fight-usa)
 npm run serve        # รัน web server ที่พอร์ต 8080 แล้วเปิด http://localhost:8080
 ```
 
-คีย์บอร์ดในหน้าเว็บ: ลูกศร = เลื่อน/ลอย · `Z` = B (เป่าลูกโป่ง) · `X` = A (เตะ) · `Enter` = Start ·
-`Shift` = Select · ผู้เล่น 2: `WASD` = เลื่อน/ลอย · `F` = B · `G` = A · `C` = Start · `V` = Select ·
-`P` = หยุด · `R` = restart · `M` = เปิด/ปิดเสียง · `H` = สลับความละเอียด 1x / HD 2x / HD 4x
+หน้าเว็บ: **เมนูเลือกเกมด้านซ้าย** (สไตล์ dialog เกม NES + thumbnail จากภาพ HD title) · จอเกมด้านขวา ·
+ปุ่ม `1x / 2x / 4x / ⛶` ใต้จอ + **แผงควบคุม/สถานะใต้ปุ่ม** (กว้างเท่าจอพอดีทุกแถว) —
+คีย์บอร์ด (อิง**ตำแหน่งปุ่มกายภาพ** `e.code` — กดติดเสมอไม่ว่าจะสลับภาษาคีย์บอร์ดเป็นอะไร):
+ลูกศร = เลื่อน · `Z` = B · `X` = A · `Enter` = Start · `Shift` = Select ·
+ผู้เล่น 2: `WASD` + `F`/`G`/`C`/`V` · `P` = หยุด · `R` = restart · `M` = เสียง (เปิดเป็นค่าเริ่มต้น — จะเล่นหลังกด/คลิกครั้งแรกตามนโยบายเบราว์เซอร์)
 
-### เล่นแบบ HD (เรียลไทม์)
+**เกมแพด (รองรับ 2 ตัว):** เสียบแล้วเล่นได้ทันที — แพดตัวแรก = ผู้เล่น 1, ตัวที่สอง = ผู้เล่น 2 ·
+ปุ่ม **B = b0** · **A = b1** · **Select = b8** · **Start = b9** · ทิศทาง = dpad (b12-b15) หรือแกน analog
 
-หน้าเว็บเรนเดอร์ด้วย **Scale2x ในโดเมน palette-index แบบเรียลไทม์** (โค้ดเดียวกับ exporter) —
-ค่าเริ่มต้น **HD 4x (1024×960)** สลับเป็น 1x / HD 2x ได้จากปุ่มเหนือ canvas หรือกด `H`
-ทำงานที่ 60fps เพราะใช้ scratch buffer ใช้ซ้ำ (zero-alloc ต่อเฟรม)
+**คีย์ระบบ:** `H` สลับ 1x/2x/4x · `L` เต็มจอ · `Q` เต็มความกว้าง (ยุบแผงข้าง เหลือจอ+ปุ่ม) ·
+`Tab` เปิดเมนูเลือกเกมด้วยคีย์บอร์ด (↑↓ เลื่อน, Enter สลับ, Esc ออก — NES ไม่ใช้ปุ่มพวกนี้ จึงไม่ชนกับตัวเกม) ·
+หน้าจะ**จำค่าที่ตั้งไว้**ใน localStorage: เกมล่าสุด / โหมดจอ / เต็มกว้าง / เสียง
+
+### จอเกม (HD เรียลไทม์)
+
+เรนเดอร์ด้วย **Scale2x ในโดเมน palette-index แบบเรียลไทม์** (โค้ดเดียวกับ exporter) —
+โหมด 1x/2x/4x มีความละเอียดภายในตามโหมด (256/512/1024 กว้าง) และขนาดแสดงผลย่อขยายตามหน้าต่าง
+แบบ pixelated คงสัดส่วน 16:15 ของ NES เสมอ ทำงาน 60fps เพราะใช้ scratch buffer ใช้ซ้ำ (zero-alloc)
+
+### เพิ่มเกมใหม่
+
+1. วางไฟล์ `.nes` (NROM) ใน `roms/`
+2. เพิ่ม script ใน `package.json`: `"build:xx": "node tools/nes2js.cjs public/game \"roms/<ไฟล์>.nes\""`
+3. รัน `npm run build:<id>` แล้วเพิ่ม 1 บรรทัดใน `public/games.js` (globalKey = id uppercase เปลี่ยน `-` เป็น `_`)
+4. (ทางเลือก) เพิ่ม config ของเกมใน `tools/export-hd.cjs` — ถ้ายังไม่ calibrate ตัวละครให้ใช้ `{ skipSprites: true, scenes: ['title'] }` จะได้ title.png + GIF สำหรับ thumbnail เมนู
+
+> ตัวแปลง transpile **ทุก address ใน PRG** เป็น instruction (เหมือนที่ CPU 6502 ทำ — decode ได้จาก address ใดก็ได้)
+> จึงไม่มี `unreachable state` แม้เกมจะใช้ jump table หรือกระโดดเข้ากลางคำสั่ง (NROM-128 mirror PC ช่วง $C000+ กลับ $8000 ให้เอง)
 
 ## โครงสร้าง
 
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `tools/opcodes.cjs` | ตาราง opcode 6502 (ทุกโหมด, cycle) |
-| `tools/nes2js.cjs` | parser iNES → scan code (reset/nmi/irq + linear ทั้ง ROM) → emit JS |
+| `tools/nes2js.cjs` | parser iNES → emit JS (ทุก address = 1 instruction, dispatch ต่อ page 256 — เร็วแบบ jump table) |
 | `tools/smoke.cjs` | เทสต์ headless + ASCII frame dump |
 | `tools/png.cjs` | PNG encoder (RGBA) ใช้ร่วมทุก exporter — ไม่มี dependency |
 | `tools/gif.cjs` | GIF89a + LZW encoder/decoder (มี round-trip self-test) |
