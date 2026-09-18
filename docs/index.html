@@ -149,11 +149,61 @@
     .ctrl-group > div { white-space: normal; }
   }
 
-  /* ---------- Fullscreen ---------- */
-  canvas#screen:fullscreen, canvas#screen:-webkit-full-screen {
+  /* ---------- Fullscreen (ไปที่ .play-area ทั้งกล่อง เพื่อให้ปุ่มสัมผัสอยู่บนจอด้วย) ---------- */
+  .play-area:fullscreen, .play-area:-webkit-full-screen {
+    display: flex; align-items: center; justify-content: center;
+    background: #000; border: none; border-radius: 0;
+  }
+  .play-area:fullscreen canvas, .play-area:-webkit-full-screen canvas {
     width: 100vw; height: 100vh; max-width: none; aspect-ratio: auto;
     object-fit: contain; image-rendering: pixelated; background: #000; border: none; border-radius: 0;
   }
+
+  /* ---------- ปุ่มสัมผัส P1 (มือถือ/แท็บเล็ต) ----------
+     ซ่อนเสมอ แสดงเฉพาะเครื่อง touch (class .touch จาก JS หรือ media (pointer:coarse))
+     อยู่ใน .play-area เดียวกับ canvas → ครอบคลุมทั้งแบบธรรมดาและเต็มจอ */
+  .play-area { position: relative; }
+  .touch-controls {
+    display: none; position: absolute; inset: 0; pointer-events: none;
+    user-select: none; -webkit-user-select: none; z-index: 5;
+  }
+  body.touch .touch-controls { display: block; }
+  @media (pointer: coarse) { body .touch-controls { display: block; } }
+  .tc-btn {
+    pointer-events: auto; touch-action: none; cursor: pointer;
+    border: 2px solid rgba(255,255,255,.45); border-radius: 12px;
+    background: rgba(20,20,30,.45); color: #fff; font-family: inherit; font-weight: bold;
+    box-shadow: 0 2px 10px rgba(0,0,0,.55);
+    -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
+  }
+  .tc-btn.held { background: rgba(120,200,120,.55); border-color: var(--acc); }
+  .tc-dpad {
+    position: absolute; left: calc(14px + env(safe-area-inset-left)); bottom: calc(18px + env(safe-area-inset-bottom));
+    display: grid; grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px); gap: 2px;
+  }
+  .tc-dpad .tc-btn { font-size: 16px; line-height: 1; }
+  .tc-up { grid-column: 2; grid-row: 1; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
+  .tc-left { grid-column: 1; grid-row: 2; border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
+  .tc-down { grid-column: 2; grid-row: 3; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+  .tc-right { grid-column: 3; grid-row: 2; border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
+  .tc-cluster {
+    position: absolute; right: calc(14px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
+  }
+  .tc-pair { display: flex; gap: 10px; align-items: center; }
+  .tc-sel, .tc-st { width: 62px; height: 30px; font-size: 9px; border-radius: 8px; opacity: .92; }
+  .tc-b { width: 52px; height: 52px; border-radius: 50%; font-size: 15px; }
+  .tc-a { width: 58px; height: 58px; border-radius: 50%; font-size: 17px; }
+  .tc-exit {
+    position: absolute; top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right));
+    width: 44px; height: 44px; border-radius: 10px; font-size: 15px; display: none;
+  }
+  .play-area:fullscreen .tc-exit, .play-area:-webkit-full-screen .tc-exit { display: block; }
+  .play-area:fullscreen .tc-dpad, .play-area:-webkit-full-screen .tc-dpad {
+    grid-template-columns: repeat(3, min(20vh, 72px)); grid-template-rows: repeat(3, min(20vh, 72px));
+  }
+  .play-area:fullscreen .tc-b, .play-area:-webkit-full-screen .tc-b { width: 72px; height: 72px; font-size: 20px; }
+  .play-area:fullscreen .tc-a, .play-area:-webkit-full-screen .tc-a { width: 80px; height: 80px; font-size: 24px; }
 </style>
 </head>
 <body>
@@ -173,7 +223,28 @@
   <div class="main">
     <div class="screen">
       <div class="screen-frame">
-        <canvas id="screen" width="1024" height="960"></canvas>
+        <div class="play-area">
+          <canvas id="screen" width="1024" height="960"></canvas>
+          <div class="touch-controls" id="touchControls">
+            <div class="tc-dpad">
+              <button class="tc-btn tc-up" data-tc="up" type="button" aria-label="ขึ้น">&#9650;</button>
+              <button class="tc-btn tc-left" data-tc="left" type="button" aria-label="ซ้าย">&#9664;</button>
+              <button class="tc-btn tc-down" data-tc="down" type="button" aria-label="ลง">&#9660;</button>
+              <button class="tc-btn tc-right" data-tc="right" type="button" aria-label="ขวา">&#9654;</button>
+            </div>
+            <div class="tc-cluster">
+              <div class="tc-pair">
+                <button class="tc-btn tc-sel" data-tc="sel" type="button">SELECT</button>
+                <button class="tc-btn tc-st" data-tc="start" type="button">START</button>
+              </div>
+              <div class="tc-pair">
+                <button class="tc-btn tc-b" data-tc="B" type="button">B</button>
+                <button class="tc-btn tc-a" data-tc="A" type="button">A</button>
+              </div>
+            </div>
+            <button class="tc-btn tc-exit" id="tcExit" type="button" aria-label="ออกจากเต็มจอ">&#x2715;</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -248,12 +319,13 @@
   modeBtns[2].onclick = function () { setMode(2); };
   modeBtns[4].onclick = function () { setMode(4); };
 
-  /* ---------------- Fullscreen ---------------- */
+  /* ---------------- Fullscreen (เต็มจอที่ .play-area เพื่อให้ปุ่ม touch บนจอด้วย) ---------------- */
   var fsBtn = document.getElementById('mfs');
+  var playArea = document.querySelector('.play-area');
   function fsElement() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
   function toggleFullscreen() {
     if (fsElement()) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    else { var rq = canvas.requestFullscreen || canvas.webkitRequestFullscreen; if (rq) rq.call(canvas); }
+    else { var rq = playArea.requestFullscreen || playArea.webkitRequestFullscreen; if (rq) rq.call(playArea); }
   }
   function updateFsLabel() { fsBtn.textContent = fsElement() ? 'Exit' : '⛶'; }
   fsBtn.onclick = function () { toggleFullscreen(); focusPlay(); };
@@ -465,6 +537,49 @@
       }
       gpPrev[port] = st;
     }
+  }
+
+  /* ---------------- Touchscreen: ปุ่มสัมผัส P1 (มือถือ/แท็บเล็ต) ----------------
+   * D-pad + B/A + Select/Start → setButton(0,...) เดียวกับคีย์บอร์ด
+   * รองรับหลายนิ้วพร้อมกัน และลากนิ้วไปมาระหว่างปุ่ม (เช่นทิศเฉียง) */
+  var touchEl = document.getElementById('touchControls');
+  function tcBtnAt(x, y) {
+    var el = document.elementFromPoint(x, y);
+    while (el && el !== touchEl && !(el.classList && el.classList.contains('tc-btn'))) el = el.parentElement;
+    return (el && el.classList && el.classList.contains('tc-btn')) ? el : null;
+  }
+  if (touchEl) {
+    var activePointers = {};
+    var exitBtn = document.getElementById('tcExit');
+    function tcSetButton(el, down) {
+      var name = el.getAttribute('data-tc');
+      if (!name || !sys) return;
+      sys.setButton(0, name, down);
+      el.classList.toggle('held', !!down);
+    }
+    touchEl.addEventListener('pointerdown', function (e) {
+      var btn = tcBtnAt(e.clientX, e.clientY);
+      if (!btn) return;
+      e.preventDefault();
+      if (btn === exitBtn) { toggleFullscreen(); return; }
+      try { btn.setPointerCapture(e.pointerId); } catch (err) {}
+      activePointers[e.pointerId] = btn;
+      tcSetButton(btn, true);
+    });
+    touchEl.addEventListener('pointermove', function (e) {
+      var prev = activePointers[e.pointerId];
+      if (!prev) return;
+      var btn = tcBtnAt(e.clientX, e.clientY);
+      if (btn === prev) return;
+      if (btn) tcSetButton(btn, true);
+      tcSetButton(prev, false);
+      activePointers[e.pointerId] = btn || null;
+    });
+    touchEl.addEventListener('pointerup', function (e) { var b = activePointers[e.pointerId]; if (b) tcSetButton(b, false); delete activePointers[e.pointerId]; });
+    touchEl.addEventListener('pointercancel', function (e) { var b = activePointers[e.pointerId]; if (b) tcSetButton(b, false); delete activePointers[e.pointerId]; });
+    touchEl.addEventListener('lostpointercapture', function (e) { var b = activePointers[e.pointerId]; if (b) tcSetButton(b, false); delete activePointers[e.pointerId]; });
+    /* ป้องกัน iOS ย่อหน้า/เลื่อนค้างเวลากดปุ่ม */
+    touchEl.addEventListener('touchstart', function (e) { e.preventDefault(); }, { passive: false });
   }
 
   /* ---------------- main loop ----------------
