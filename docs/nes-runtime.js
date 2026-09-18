@@ -583,6 +583,10 @@
       const fineX0 = ppu.fineX, sx = ppu.scrollX, sy = ppu.scrollY;
       const showBg = (mask & 0x08) !== 0;
       const showSp = (mask & 0x10) !== 0;
+      /* $2001 bit1/bit2: ซ่อน BG / sprite ใน 8 พิกเซลซ้ายสุด
+         (เกมใช้ซ่อนสไปรต์ด้วยการย้าย X ไป 0 เช่น เคอร์เซอร์กะพริบของ soccer-world) */
+      const bgLeft = (mask & 0x02) !== 0 ? 0 : 8;
+      const spLeft = (mask & 0x04) !== 0 ? 0 : 8;
       const spPat = spPatOf(); /* sprite pattern table ไม่เปลี่ยนกลางเฟรม */
       ppu.sp0HitFrame = false;
 
@@ -644,7 +648,7 @@
           const bgPat = (lineCtrl[y] & 0x10) ? 0x1000 : 0;
           /* แถวเกิน 256px (ty >= 32) ให้ข้ามไปอีก nametable แนวตั้ง (flip bit1 ของ ntSelect) */
           const ntSelectRow = ntSelect ^ ((ty >> 5) ? 2 : 0);
-          for (let x = 0; x < 256; x++) {
+          for (let x = bgLeft; x < 256; x++) {
             const vx = sx + x;
             const tx = vx >> 3;
             const col = tx & 31;
@@ -698,7 +702,7 @@
             const row = syy * 256;
             for (let dx = 0; dx < 8; dx++) {
               const sxx = s.x + dx;
-              if (sxx < 0 || sxx >= 256) continue;
+              if (sxx < spLeft || sxx >= 256) continue;
               const bit = flipH ? dx : (7 - dx);
               const pv = ((t0 >> bit) & 1) | (((t1 >> bit) & 1) << 1);
               if (pv === 0) continue;
