@@ -164,7 +164,7 @@
      อยู่ใน .play-area เดียวกับ canvas → ครอบคลุมทั้งแบบธรรมดาและเต็มจอ */
   .play-area { position: relative; }
   .touch-controls {
-    display: none; position: absolute; inset: 0; pointer-events: none;
+    display: none; position: absolute; inset: 0; pointer-events: auto;
     user-select: none; -webkit-user-select: none; z-index: 5;
   }
   body.touch .touch-controls { display: block; }
@@ -177,15 +177,20 @@
     -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none;
   }
   .tc-btn.held { background: rgba(120,200,120,.55); border-color: var(--acc); }
-  .tc-dpad {
-    position: absolute; left: calc(14px + env(safe-area-inset-left)); bottom: calc(18px + env(safe-area-inset-bottom));
-    display: grid; grid-template-columns: repeat(3, 32px); grid-template-rows: repeat(3, 32px); gap: 2px;
+  .tc-stick {
+    position: absolute; width: 132px; height: 132px; pointer-events: none; opacity: 0; transform: translate(-50%, -50%) scale(.85);
+    border-radius: 50%; border: 2px solid rgba(255,255,255,.45); background: rgba(18,18,24,.5); box-shadow: 0 2px 12px rgba(0,0,0,.4);
+    transition: opacity .12s ease, transform .12s ease;
   }
-  .tc-dpad .tc-btn { font-size: 11px; line-height: 1; }
-  .tc-up { grid-column: 2; grid-row: 1; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
-  .tc-left { grid-column: 1; grid-row: 2; border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
-  .tc-down { grid-column: 2; grid-row: 3; border-top-left-radius: 4px; border-top-right-radius: 4px; }
-  .tc-right { grid-column: 3; grid-row: 2; border-top-left-radius: 4px; border-bottom-left-radius: 4px; }
+  .tc-stick.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  .tc-stick::before {
+    content: ""; position: absolute; inset: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,.2);
+  }
+  .tc-stick-knob {
+    position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; border-radius: 50%;
+    background: rgba(255,255,255,.8); border: 2px solid rgba(0,0,0,.25); box-shadow: 0 2px 8px rgba(0,0,0,.35);
+    transform: translate(calc(-50% + var(--dx, 0px)), calc(-50% + var(--dy, 0px)));
+  }
   .tc-cluster {
     position: absolute; right: calc(14px + env(safe-area-inset-right)); bottom: calc(18px + env(safe-area-inset-bottom));
     display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
@@ -226,11 +231,8 @@
         <div class="play-area">
           <canvas id="screen" width="1024" height="960"></canvas>
           <div class="touch-controls" id="touchControls">
-            <div class="tc-dpad">
-              <button class="tc-btn tc-up" data-tc="up" type="button" aria-label="ขึ้น">&#9650;</button>
-              <button class="tc-btn tc-left" data-tc="left" type="button" aria-label="ซ้าย">&#9664;</button>
-              <button class="tc-btn tc-down" data-tc="down" type="button" aria-label="ลง">&#9660;</button>
-              <button class="tc-btn tc-right" data-tc="right" type="button" aria-label="ขวา">&#9654;</button>
+            <div class="tc-stick" id="tcStick" aria-hidden="true">
+              <div class="tc-stick-knob" id="tcStickKnob"></div>
             </div>
             <div class="tc-cluster">
               <div class="tc-pair">
@@ -543,31 +545,93 @@
    * D-pad + B/A + Select/Start → setButton(0,...) เดียวกับคีย์บอร์ด
    * รองรับหลายนิ้วพร้อมกัน และลากนิ้วไปมาระหว่างปุ่ม (เช่นทิศเฉียง) */
   var touchEl = document.getElementById('touchControls');
+  var tcStick = document.getElementById('tcStick');
+  var tcStickKnob = document.getElementById('tcStickKnob');
   function tcBtnAt(x, y) {
     var el = document.elementFromPoint(x, y);
     while (el && el !== touchEl && !(el.classList && el.classList.contains('tc-btn'))) el = el.parentElement;
     return (el && el.classList && el.classList.contains('tc-btn')) ? el : null;
   }
+  function tcSetStickButtons(state) {
+    if (!sys) return;
+    var buttons = ['left', 'right', 'up', 'down'];
+    for (var i = 0; i < buttons.length; i++) sys.setButton(0, buttons[i], !!state[buttons[i]]);
+  }
   if (touchEl) {
     var activePointers = {};
+    var stickPointerId = null;
+    var stickCenter = { x: 0, y: 0 };
     var exitBtn = document.getElementById('tcExit');
+    function tcStickReset() {
+      tcSetStickButtons({ left: false, right: false, up: false, down: false });
+      if (tcStickKnob) {
+        tcStickKnob.style.setProperty('--dx', '0px');
+        tcStickKnob.style.setProperty('--dy', '0px');
+      }
+      if (tcStick) tcStick.classList.remove('show');
+      stickPointerId = null;
+      stickCenter.x = 0;
+      stickCenter.y = 0;
+    }
     function tcSetButton(el, down) {
       var name = el.getAttribute('data-tc');
       if (!name || !sys) return;
       sys.setButton(0, name, down);
       el.classList.toggle('held', !!down);
     }
+    function tcApplyStick(clientX, clientY) {
+      if (stickPointerId === null || !tcStick) return;
+      var rect = touchEl.getBoundingClientRect();
+      var dx = clientX - rect.left - stickCenter.x;
+      var dy = clientY - rect.top - stickCenter.y;
+      var state = { left: false, right: false, up: false, down: false };
+      var deadzone = 12;
+      if (Math.abs(dx) > deadzone) state.left = dx < 0, state.right = dx > 0;
+      if (Math.abs(dy) > deadzone) state.up = dy < 0, state.down = dy > 0;
+      var knobDX = Math.max(-52, Math.min(52, dx));
+      var knobDY = Math.max(-52, Math.min(52, dy));
+      var len = Math.hypot(dx, dy);
+      if (len > 52) {
+        var scale = 52 / len;
+        knobDX = dx * scale;
+        knobDY = dy * scale;
+      }
+      tcStick.style.left = stickCenter.x + 'px';
+      tcStick.style.top = stickCenter.y + 'px';
+      tcStick.classList.add('show');
+      tcStickKnob.style.setProperty('--dx', knobDX + 'px');
+      tcStickKnob.style.setProperty('--dy', knobDY + 'px');
+      tcSetStickButtons(state);
+    }
     touchEl.addEventListener('pointerdown', function (e) {
       var btn = tcBtnAt(e.clientX, e.clientY);
-      if (!btn) return;
+      if (btn) {
+        e.preventDefault();
+        if (btn === exitBtn) { toggleFullscreen(); return; }
+        try { btn.setPointerCapture(e.pointerId); } catch (err) {}
+        activePointers[e.pointerId] = btn;
+        tcSetButton(btn, true);
+        return;
+      }
+      if (stickPointerId !== null) return;
       e.preventDefault();
-      if (btn === exitBtn) { toggleFullscreen(); return; }
-      try { btn.setPointerCapture(e.pointerId); } catch (err) {}
-      activePointers[e.pointerId] = btn;
-      tcSetButton(btn, true);
+      stickPointerId = e.pointerId;
+      var rect = touchEl.getBoundingClientRect();
+      stickCenter.x = e.clientX - rect.left;
+      stickCenter.y = e.clientY - rect.top;
+      tcStick.style.left = stickCenter.x + 'px';
+      tcStick.style.top = stickCenter.y + 'px';
+      tcStick.classList.add('show');
+      tcStickKnob.style.setProperty('--dx', '0px');
+      tcStickKnob.style.setProperty('--dy', '0px');
+      tcApplyStick(e.clientX, e.clientY);
     });
     touchEl.addEventListener('pointermove', function (e) {
       var prev = activePointers[e.pointerId];
+      if (stickPointerId === e.pointerId) {
+        tcApplyStick(e.clientX, e.clientY);
+        return;
+      }
       if (!prev) return;
       var btn = tcBtnAt(e.clientX, e.clientY);
       if (btn === prev) return;
@@ -575,9 +639,14 @@
       tcSetButton(prev, false);
       activePointers[e.pointerId] = btn || null;
     });
-    touchEl.addEventListener('pointerup', function (e) { var b = activePointers[e.pointerId]; if (b) tcSetButton(b, false); delete activePointers[e.pointerId]; });
-    touchEl.addEventListener('pointercancel', function (e) { var b = activePointers[e.pointerId]; if (b) tcSetButton(b, false); delete activePointers[e.pointerId]; });
-    touchEl.addEventListener('lostpointercapture', function (e) { var b = activePointers[e.pointerId]; if (b) tcSetButton(b, false); delete activePointers[e.pointerId]; });
+    touchEl.addEventListener('pointerup', function (e) {
+      var b = activePointers[e.pointerId];
+      if (b) tcSetButton(b, false);
+      delete activePointers[e.pointerId];
+      if (stickPointerId === e.pointerId) tcStickReset();
+    });
+    touchEl.addEventListener('pointercancel', function (e) { var b = activePointers[e.pointerId]; if (b) tcSetButton(b, false); delete activePointers[e.pointerId]; if (stickPointerId === e.pointerId) tcStickReset(); });
+    touchEl.addEventListener('lostpointercapture', function (e) { var b = activePointers[e.pointerId]; if (b) tcSetButton(b, false); delete activePointers[e.pointerId]; if (stickPointerId === e.pointerId) tcStickReset(); });
     /* ป้องกัน iOS ย่อหน้า/เลื่อนค้างเวลากดปุ่ม */
     touchEl.addEventListener('touchstart', function (e) { e.preventDefault(); }, { passive: false });
   }
