@@ -10,6 +10,10 @@
   const CPU_CLOCK = 1789772.727;
   const SAMPLE_RATE = 44100;
   const CYCLES_PER_FRAME = 29780;
+  const CYCLES_PER_LINE = CYCLES_PER_FRAME / 262;
+  /* โมเดลเฟรมนับ cycle 0 ที่จุดเริ่ม vblank (NMI) — scanline 0 ที่มองเห็น
+     จึงเริ่มหลัง vblank 20 สแกนไลน์: cycles → scanline ต้องหักส่วนนี้ออก */
+  const VBLANK_CYCLES = Math.round(20 * CYCLES_PER_LINE);
 
 /* Firebrandx 2C02 palette (r,g,b) — มาตรฐานที่ใช้ใน Mesen/FCEUX/Nestopia */
   const PALETTE_SRC = [
@@ -82,6 +86,7 @@
          เพราะโมเดล whole-frame ไม่มี raster ตลอด exec — เกมอย่าง soccer-world
          รอ flag นี้กลาง NMI เพื่อ split scroll (รอ value 0→1) */
       sp0HitY: -1,
+      sp0HitX: 0,
       sp0HitDone: false,
       frameBuffered: false,
       /* split-scroll log: บันทึกทุก $2005 write คู่ พร้อม CPU cycle ที่เกิดขึ้น
@@ -150,7 +155,7 @@
     const cpu = {
       A: 0, X: 0, Y: 0, P: 0x24, SP: 0xFD, PC: 0x8000,
       cycles: 0, budget: CYCLES_PER_FRAME, fb: false,
-      vblCleared: false, vblClearCycles: 2273,
+      vblCleared: false, vblClearCycles: VBLANK_CYCLES,
       nmi: false, irq: false, halted: false, haltPC: 0,
       exec: null, ram,
       r8: function (a) {
@@ -184,7 +189,7 @@
           }
           return;
         }
-        if (a === 0x4014) { ppu.oam.set(ram.subarray(v << 8, (v << 8) + 256)); cpu.cycles += 513; ppu.sp0HitY = ppu.oam[0]; return; }
+        if (a === 0x4014) { ppu.oam.set(ram.subarray(v << 8, (v << 8) + 256)); cpu.cycles += 513; ppu.sp0HitY = ppu.oam[0]; ppu.sp0HitX = ppu.oam[3]; return; }
         if (a === 0x4015) { apu.writeEnable(v); return; }
         if (a === 0x4016) { controllerWrite(v); return; }
         if (a === 0x4017) { apu.writeFrameCounter(v); return; }
@@ -205,7 +210,7 @@
         /* sprite-0 hit: raster ถึงแถว Y ของ sprite #0 → bit6 ขึ้น (คงค้างทั้งเฟรม
            จนกว่า vblank ถัดไป; ต้องมี BG+sprite rendering เปิด และ sprite #0 อยู่บนจอ) */
         if (!ppu.sp0HitDone && (ppu.mask & 0x18) && ppu.sp0HitY >= 0 && ppu.sp0HitY < 0xEF &&
-            this.cycles >= ppu.sp0HitY * (CYCLES_PER_FRAME / 262)) {
+            this.cycles >= VBLANK_CYCLES + (ppu.sp0HitY + 1) * CYCLES_PER_LINE + ppu.sp0HitX / 3) {
           ppu.sp0HitDone = true;
           ppu.status |= 0x40;
         }
@@ -600,7 +605,6 @@
          - entry แรกสุด (เขียนใน NMI ก่อน rendering) ใช้กับทุก scanline เป็น default
          - entry หลังๆ ที่เขียนหลัง sprite-0 hit (mid-frame) จะเริ่มมีผลตั้งแต่
            scanline ที่สอดคล้องกับ cycle นั้น */
-      const cyclesPerLine = CYCLES_PER_FRAME / 262;
       const log = ppu.scrollLog;
 
       /* สร้าง array scroll สำหรับแต่ละ scanline 0-239 */
@@ -623,7 +627,7 @@
         let curSx = log[0].sx, curSy = log[0].sy & 0xFF;
         let logIdx = 1;
         for (let y = 0; y < 240; y++) {
-          const lineStart = y * cyclesPerLine;
+          const lineStart = VBLANK_CYCLES + y * CYCLES_PER_LINE;
           while (logIdx < log.length && log[logIdx].cycles <= lineStart) {
             curSx = log[logIdx].sx;
             curSy = log[logIdx].sy & 0xFF;
