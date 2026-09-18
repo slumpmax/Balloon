@@ -1,6 +1,6 @@
 'use strict';
-const { createSystem } = require('../public/nes-runtime.js');
-const ROM = require('../public/game/baseball-usa-europe/baseball-usa-europe.rom.js');
+const { createSystem } = require('../docs/nes-runtime.js');
+const ROM = require('../docs/game/baseball-usa-europe/baseball-usa-europe.rom.js');
 const s = createSystem({ rom: ROM, headless: true });
 let lastPc = -1, stable = 0;
 for (let i = 0; i < 120; i++) {
@@ -12,7 +12,7 @@ for (let i = 0; i < 120; i++) {
 s.frame();
 const px = s.video.pixels;
 const chars = ' .:-=+*#%@';
-const PAL = require('../public/nes-runtime.js').PALETTE;
+const PAL = require('../docs/nes-runtime.js').PALETTE;
 for (let y = 0; y < 240; y += 3) {
   let line = '';
   for (let x = 0; x < 256; x += 2) {

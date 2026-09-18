@@ -1,5 +1,5 @@
-﻿const zlib = require('zlib'), fs = require('fs');
-const PAL = require('D:/GitHub/Balloon/public/nes-runtime.js').PALETTE;
+const zlib = require('zlib'), fs = require('fs');
+const PAL = require('D:/GitHub/Balloon/docs/nes-runtime.js').PALETTE;
 function crc32(buf){let c,t=0;for(let i=0;i<buf.length;i++){c=(t^buf[i])&0xFF;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t=(t>>>8)^c;}return (t^0xFFFFFFFF)>>>0;}
 function chunk(type,data){const len=Buffer.alloc(4);len.writeUInt32BE(data.length,0);const td=Buffer.concat([Buffer.from(type,'ascii'),data]);const crc=Buffer.alloc(4);crc.writeUInt32BE(crc32(td),0);return Buffer.concat([len,td,crc]);}
 function pngSmall(px,file,scale){const w=Math.ceil(256/scale),h=Math.ceil(240/scale);
@@ -11,8 +11,8 @@ function pngSmall(px,file,scale){const w=Math.ceil(256/scale),h=Math.ceil(240/sc
 for (const [src,dst] of [
  ['bb_after_start','bb_after_start_s'],['bb_after_a','bb_after_a_s'],['bb_after_a2','bb_after_a2_s'],['bb_after_start2','bb_after_start2_s']]) {
  // run the game and capture
- const { createSystem } = require('D:/GitHub/Balloon/public/nes-runtime.js');
- const ROM = require('D:/GitHub/Balloon/public/game/baseball-usa-europe/baseball-usa-europe.rom.js');
+ const { createSystem } = require('D:/GitHub/Balloon/docs/nes-runtime.js');
+ const ROM = require('D:/GitHub/Balloon/docs/game/baseball-usa-europe/baseball-usa-europe.rom.js');
  const s = createSystem({ rom: ROM, headless: true });
  const cls=()=>['left','right','up','down','A','B','start','sel'].forEach(b=>s.setButton(0,b,false));
  const run=n=>{for(let i=0;i<n;i++)s.frame();};

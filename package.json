@@ -11,7 +11,7 @@
     "smoke": "node tools/smoke.cjs",
     "export:sprites": "node tools/export-sprites.cjs",
     "export:hd": "node tools/export-hd.cjs",
-    "serve": "npx serve public -l 8080",
+    "serve": "npx serve docs -l 8080",
     "build:bb": "node tools/nes2js.cjs public/game \"roms/Baseball (USA, Europe).nes\"",
     "build:km": "node tools/nes2js.cjs public/game \"roms/Kinnikuman - Muscle Tag Match (Japan).nes\"",
     "build:sc": "node tools/nes2js.cjs public/game \"roms/Soccer (World).nes\""

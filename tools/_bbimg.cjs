@@ -1,11 +1,11 @@
 'use strict';
 const fs = require('fs');
-const { createSystem } = require('../public/nes-runtime.js');
-const ROM = require('../public/game/baseball-usa-europe/baseball-usa-europe.rom.js');
+const { createSystem } = require('../docs/nes-runtime.js');
+const ROM = require('../docs/game/baseball-usa-europe/baseball-usa-europe.rom.js');
 const s = createSystem({ rom: ROM, headless: true });
 function bmp(px, file) {
   const w = 256, h = 240;
-  const PAL = require('../public/nes-runtime.js').PALETTE;
+  const PAL = require('../docs/nes-runtime.js').PALETTE;
   const rowSize = (w * 3 + 3) & ~3;
   const data = Buffer.alloc(54 + rowSize * h);
   data.write('BM'); data.writeUInt32LE(54 + rowSize * h, 2); data.writeUInt32LE(54, 10);

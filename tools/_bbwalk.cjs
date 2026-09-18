@@ -1,6 +1,6 @@
 'use strict';
-const { createSystem } = require('../public/nes-runtime.js');
-const ROM = require('../public/game/baseball-usa-europe/baseball-usa-europe.rom.js');
+const { createSystem } = require('../docs/nes-runtime.js');
+const ROM = require('../docs/game/baseball-usa-europe/baseball-usa-europe.rom.js');
 const s = createSystem({ rom: ROM, headless: true });
 const cls = () => ['left','right','up','down','A','B','start','sel'].forEach(b => s.setButton(0, b, false));
 const run = n => { for (let i = 0; i < n; i++) s.frame(); };

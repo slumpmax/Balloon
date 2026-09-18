@@ -1,7 +1,7 @@
 'use strict';
-const { createSystem } = require('../public/nes-runtime.js');
-const ROM = require('../public/game/baseball-usa-europe/baseball-usa-europe.rom.js');
-const PAL = require('../public/nes-runtime.js').PALETTE;
+const { createSystem } = require('../docs/nes-runtime.js');
+const ROM = require('../docs/game/baseball-usa-europe/baseball-usa-europe.rom.js');
+const PAL = require('../docs/nes-runtime.js').PALETTE;
 const s = createSystem({ rom: ROM, headless: true });
 const chars = ' .:-=+*#%@';
 function ascii(tag, fine) {

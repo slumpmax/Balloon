@@ -15,14 +15,14 @@ const { encodePNG } = require('./png.cjs');
 const { scale2xIndex, nearestRGBA, indicesToRGBA } = require('./scaler.cjs');
 const { encodeGIF } = require('./gif.cjs');
 
-const GAME_DIR = path.join(__dirname, '..', 'public', 'game');
+const GAME_DIR = path.join(__dirname, '..', 'docs', 'game');
 
 /* เลือกเกม: node tools/export-hd.cjs [game-id] — default = balloon-fight-usa */
 const GAME_ID = process.argv[2] || 'balloon-fight-usa';
 const romFile = path.join(GAME_DIR, GAME_ID, GAME_ID + '.rom.js');
 if (!fs.existsSync(romFile)) { console.error('rom not found: ' + romFile + ' — run npm run build:' + GAME_ID + ' first'); process.exit(1); }
 const ROM = require(romFile);
-const { createSystem, PALETTE } = require(path.join(__dirname, '..', 'public', 'nes-runtime.js'));
+const { createSystem, PALETTE } = require(path.join(__dirname, '..', 'docs', 'nes-runtime.js'));
 
 /* ต่อเกม: รูปแบบ composite ของตัวละคร (จากการ calibrate)
  *  - balloon-fight-usa: ผู้เล่น/ศัตรู = 2x3 tiles (16x24), P1 ที่ slot 8

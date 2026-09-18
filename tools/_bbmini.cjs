@@ -1,9 +1,9 @@
 'use strict';
 const fs = require('fs');
 const zlib = require('zlib');
-const { createSystem } = require('../public/nes-runtime.js');
-const PAL = require('../public/nes-runtime.js').PALETTE;
-const ROM = require('../public/game/baseball-usa-europe/baseball-usa-europe.rom.js');
+const { createSystem } = require('../docs/nes-runtime.js');
+const PAL = require('../docs/nes-runtime.js').PALETTE;
+const ROM = require('../docs/game/baseball-usa-europe/baseball-usa-europe.rom.js');
 function crc32(buf) {
   let c, t = 0;
   for (let i = 0; i < buf.length; i++) {
