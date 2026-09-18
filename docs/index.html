@@ -178,16 +178,15 @@
   }
   .tc-btn.held { background: rgba(120,200,120,.55); border-color: var(--acc); }
   .tc-stick {
-    position: absolute; width: 132px; height: 132px; pointer-events: none; opacity: 0; transform: translate(-50%, -50%) scale(.85);
-    border-radius: 50%; border: 2px solid rgba(255,255,255,.45); background: rgba(18,18,24,.5); box-shadow: 0 2px 12px rgba(0,0,0,.4);
-    transition: opacity .12s ease, transform .12s ease;
+    position: absolute; left: calc(18px + env(safe-area-inset-left)); bottom: calc(18px + env(safe-area-inset-bottom));
+    width: 112px; height: 112px; pointer-events: auto; touch-action: none; border-radius: 50%;
+    border: 2px solid rgba(255,255,255,.45); background: rgba(18,18,24,.52); box-shadow: 0 2px 12px rgba(0,0,0,.4);
   }
-  .tc-stick.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
   .tc-stick::before {
-    content: ""; position: absolute; inset: 12px; border-radius: 50%; border: 1px solid rgba(255,255,255,.2);
+    content: ""; position: absolute; inset: 10px; border-radius: 50%; border: 1px solid rgba(255,255,255,.2);
   }
   .tc-stick-knob {
-    position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; border-radius: 50%;
+    position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; border-radius: 50%;
     background: rgba(255,255,255,.8); border: 2px solid rgba(0,0,0,.25); box-shadow: 0 2px 8px rgba(0,0,0,.35);
     transform: translate(calc(-50% + var(--dx, 0px)), calc(-50% + var(--dy, 0px)));
   }
@@ -231,7 +230,7 @@
         <div class="play-area">
           <canvas id="screen" width="1024" height="960"></canvas>
           <div class="touch-controls" id="touchControls">
-            <div class="tc-stick" id="tcStick" aria-hidden="true">
+            <div class="tc-stick" id="tcStick" aria-label="joystick" role="application">
               <div class="tc-stick-knob" id="tcStickKnob"></div>
             </div>
             <div class="tc-cluster">
@@ -502,6 +501,15 @@
   }
   window.addEventListener('pointerdown', unlockAudio, { once: false });
   window.addEventListener('keydown', unlockAudio, { once: false });
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden && sys) sys.stopAudio();
+  });
+  window.addEventListener('pagehide', function () {
+    if (sys) sys.stopAudio();
+  });
+  window.addEventListener('beforeunload', function () {
+    if (sys) sys.stopAudio();
+  });
 
   /* ---------------- เกมแพด (ทั้ง 2 ตัว) ----------------
    * pad1 = gamepads[0], pad2 = gamepads[1] (ตามลำดับที่เบราว์เซอร์รายงาน)
@@ -554,13 +562,14 @@
   }
   function tcSetStickButtons(state) {
     if (!sys) return;
-    var buttons = ['left', 'right', 'up', 'down'];
-    for (var i = 0; i < buttons.length; i++) sys.setButton(0, buttons[i], !!state[buttons[i]]);
+    sys.setButton(0, 'left', !!state.left);
+    sys.setButton(0, 'right', !!state.right);
+    sys.setButton(0, 'up', !!state.up);
+    sys.setButton(0, 'down', !!state.down);
   }
   if (touchEl) {
     var activePointers = {};
     var stickPointerId = null;
-    var stickCenter = { x: 0, y: 0 };
     var exitBtn = document.getElementById('tcExit');
     function tcStickReset() {
       tcSetStickButtons({ left: false, right: false, up: false, down: false });
@@ -568,10 +577,7 @@
         tcStickKnob.style.setProperty('--dx', '0px');
         tcStickKnob.style.setProperty('--dy', '0px');
       }
-      if (tcStick) tcStick.classList.remove('show');
       stickPointerId = null;
-      stickCenter.x = 0;
-      stickCenter.y = 0;
     }
     function tcSetButton(el, down) {
       var name = el.getAttribute('data-tc');
@@ -580,27 +586,34 @@
       el.classList.toggle('held', !!down);
     }
     function tcApplyStick(clientX, clientY) {
-      if (stickPointerId === null || !tcStick) return;
-      var rect = touchEl.getBoundingClientRect();
-      var dx = clientX - rect.left - stickCenter.x;
-      var dy = clientY - rect.top - stickCenter.y;
-      var state = { left: false, right: false, up: false, down: false };
-      var deadzone = 12;
-      if (Math.abs(dx) > deadzone) state.left = dx < 0, state.right = dx > 0;
-      if (Math.abs(dy) > deadzone) state.up = dy < 0, state.down = dy > 0;
-      var knobDX = Math.max(-52, Math.min(52, dx));
-      var knobDY = Math.max(-52, Math.min(52, dy));
+      if (stickPointerId === null || !tcStick || !tcStickKnob) return;
+      var rect = tcStick.getBoundingClientRect();
+      var cx = rect.left + rect.width / 2;
+      var cy = rect.top + rect.height / 2;
+      var dx = clientX - cx;
+      var dy = clientY - cy;
       var len = Math.hypot(dx, dy);
-      if (len > 52) {
-        var scale = 52 / len;
-        knobDX = dx * scale;
-        knobDY = dy * scale;
+      var maxLen = rect.width * 0.38;
+      if (len > 0.0001) {
+        var scale = Math.min(1, maxLen / len);
+        dx *= scale;
+        dy *= scale;
       }
-      tcStick.style.left = stickCenter.x + 'px';
-      tcStick.style.top = stickCenter.y + 'px';
-      tcStick.classList.add('show');
-      tcStickKnob.style.setProperty('--dx', knobDX + 'px');
-      tcStickKnob.style.setProperty('--dy', knobDY + 'px');
+      var state = { left: false, right: false, up: false, down: false };
+      if (len > 8) {
+        var yForUp = -dy;
+        var angle = Math.atan2(yForUp, dx) * 180 / Math.PI;
+        if (angle >= -22.5 && angle <= 22.5) state.right = true;
+        else if (angle > 22.5 && angle < 67.5) { state.right = true; state.up = true; }
+        else if (angle >= 67.5 && angle <= 112.5) state.up = true;
+        else if (angle > 112.5 && angle < 157.5) { state.left = true; state.up = true; }
+        else if (angle >= 157.5 || angle <= -157.5) state.left = true;
+        else if (angle > -157.5 && angle < -112.5) { state.left = true; state.down = true; }
+        else if (angle >= -112.5 && angle <= -67.5) state.down = true;
+        else if (angle > -67.5 && angle < -22.5) { state.right = true; state.down = true; }
+      }
+      tcStickKnob.style.setProperty('--dx', dx + 'px');
+      tcStickKnob.style.setProperty('--dy', dy + 'px');
       tcSetStickButtons(state);
     }
     touchEl.addEventListener('pointerdown', function (e) {
@@ -614,16 +627,12 @@
         return;
       }
       if (stickPointerId !== null) return;
+      var rect = tcStick.getBoundingClientRect();
+      var inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (!inside) return;
       e.preventDefault();
       stickPointerId = e.pointerId;
-      var rect = touchEl.getBoundingClientRect();
-      stickCenter.x = e.clientX - rect.left;
-      stickCenter.y = e.clientY - rect.top;
-      tcStick.style.left = stickCenter.x + 'px';
-      tcStick.style.top = stickCenter.y + 'px';
-      tcStick.classList.add('show');
-      tcStickKnob.style.setProperty('--dx', '0px');
-      tcStickKnob.style.setProperty('--dy', '0px');
+      try { tcStick.setPointerCapture(e.pointerId); } catch (err) {}
       tcApplyStick(e.clientX, e.clientY);
     });
     touchEl.addEventListener('pointermove', function (e) {
