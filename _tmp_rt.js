@@ -78,16 +78,7 @@
       vram: new Uint8Array(0x4000),
       dataBuf: 0,
       sp0HitFrame: false,
-      /* sprite-0 hit (bit6 ของ $2002): จำลองเป็น event ที่ scanline ของ sprite #0
-         เพราะโมเดล whole-frame ไม่มี raster ตลอด exec — เกมอย่าง soccer-world
-         รอ flag นี้กลาง NMI เพื่อ split scroll (รอ value 0→1) */
-      sp0HitY: -1,
-      sp0HitDone: false,
       frameBuffered: false,
-      /* split-scroll log: บันทึกทุก $2005 write คู่ พร้อม CPU cycle ที่เกิดขึ้น
-         เพื่อให้ renderFrame() รู้ scroll ที่ถูกต้องในแต่ละ scanline */
-      scrollLog: [], /* [{ cycles, sx, sy, ctrl }] เรียงตาม cycles */
-      scrollPendingX: -1, /* รอ Y pair */
     };
     if (rom) ppu.vram.set(rom.chr.subarray(0, 0x2000), 0);
     if (ppu.vram[0x3F00] === undefined || ppu.vram[0x3F00] === 0) ppu.vram[0x3F00] = 0x0F;
@@ -101,21 +92,7 @@
       a &= 0x3FFF;
       if (a >= 0x3F00) return ppuPalAddr(a);
       if (a >= 0x3000) return a - 0x1000;
-      if (a >= 0x2000) {
-        /* Nametable mirroring
-           rom.mirror: false = horizontal mirror ($2000=$2400=pageA, $2800=$2C00=pageB)
-                       true  = vertical mirror   ($2000=$2800=pageA, $2400=$2C00=pageB) */
-        const off = a - 0x2000; /* 0x000–0xFFF (quadrant 0–3, 0x400 each) */
-        let page;
-        if (!rom || !rom.mirror) {
-          /* horizontal: nt0=$2000 nt1=$2400 both → pageA; nt2=$2800 nt3=$2C00 both → pageB */
-          page = (off >= 0x800) ? 1 : 0;
-        } else {
-          /* vertical: nt0=$2000 nt2=$2800 both → pageA; nt1=$2400 nt3=$2C00 both → pageB */
-          page = (off & 0x400) ? 1 : 0;
-        }
-        return 0x2000 + page * 0x400 + (off & 0x3FF);
-      }
+      if (a >= 0x2000) return 0x2000 | (a & 0x7FF);
       return a;
     }
 
@@ -184,7 +161,7 @@
           }
           return;
         }
-        if (a === 0x4014) { ppu.oam.set(ram.subarray(v << 8, (v << 8) + 256)); cpu.cycles += 513; ppu.sp0HitY = ppu.oam[0]; return; }
+        if (a === 0x4014) { ppu.oam.set(ram.subarray(v << 8, (v << 8) + 256)); cpu.cycles += 513; return; }
         if (a === 0x4015) { apu.writeEnable(v); return; }
         if (a === 0x4016) { controllerWrite(v); return; }
         if (a === 0x4017) { apu.writeFrameCounter(v); return; }
@@ -201,13 +178,6 @@
         if (this.cycles >= this.vblClearCycles && !this.vblCleared && (ppu.status & 0x80)) {
           this.vblCleared = true;
           ppu.status &= 0x7F; /* vblank ends when rendering starts */
-        }
-        /* sprite-0 hit: raster ถึงแถว Y ของ sprite #0 → bit6 ขึ้น (คงค้างทั้งเฟรม
-           จนกว่า vblank ถัดไป; ต้องมี BG+sprite rendering เปิด และ sprite #0 อยู่บนจอ) */
-        if (!ppu.sp0HitDone && (ppu.mask & 0x18) && ppu.sp0HitY >= 0 && ppu.sp0HitY < 0xEF &&
-            this.cycles >= ppu.sp0HitY * (CYCLES_PER_FRAME / 262)) {
-          ppu.sp0HitDone = true;
-          ppu.status |= 0x40;
         }
         if (this.cycles >= this.budget) this.fb = true;
       },
@@ -237,10 +207,7 @@
     ppu.writeCtrl = function (v) {
       this.ctrl = v;
       if (this.w === 0) this.t = (this.t & ~0x0C00) | ((v & 3) << 10);
-      /* NMI is asserted only at vblank origin (enterVBlank). Do not latch an
-         immediate NMI here: in the whole-frame model the vblank window covers
-         the first CYCLES_PER_FRAME-derived cycles, so mid-frame $2000 writes
-         would spuriously trigger an NMI inside the game's main loop. */
+      if ((v & 0x80) && (this.status & 0x80)) cpu.nmi = true;
     };
     ppu.writeMask = function (v) { this.mask = v; };
     ppu.writeScroll = function (v) {
@@ -249,22 +216,10 @@
         this.scrollX = v & 0xFF;
         this.t = (this.t & 0xFFE0) | ((v >> 3) & 0x1F) | ((v & 7) << 12);
         this.w = 1;
-        /* บันทึก X ไว้รอ Y pair */
-        this.scrollPendingX = v & 0xFF;
       } else {
         this.scrollY = ((v >> 3) & 0x1F) * 8 + (v & 7);
         this.t = (this.t & 0x8C1F) | (((v >> 3) & 0x1F) << 5) | ((v & 7) << 12);
         this.w = 0;
-        /* บันทึก scroll คู่นี้พร้อม CPU cycle และ ctrl ปัจจุบัน */
-        if (this.scrollPendingX >= 0) {
-          this.scrollLog.push({
-            cycles: cpu.cycles,
-            sx: this.scrollPendingX,
-            sy: this.scrollY,
-            ctrl: this.ctrl,
-          });
-          this.scrollPendingX = -1;
-        }
       }
     };
     ppu.writeAddr = function (v) {
@@ -509,9 +464,6 @@
       tri.linearReload = false;
       dmc.bufFull = false;
       p1.envVol = p2.envVol = noise.envVol = 15;
-      /* หยุดทุก channel ชัดเจน — ป้องกันโน้ตค้างถ้า generate() ถูกเรียกหลัง reset */
-      p1.len = p2.len = tri.len = noise.len = 0;
-      dmc.active = false; dmc.bytesLeft = 0;
       noise.lfsr = 1;
       fc.count = 0; fc.step = 0; fc.mode5 = false; fc.irqInhibit = false; fc.irqFlag = false;
       const a = apu; a.dcX = 0; a.dcY = 0;
@@ -554,7 +506,7 @@
       { A: 0, B: 0, sel: 0, start: 0, up: 0, down: 0, left: 0, right: 0 },
       { A: 0, B: 0, sel: 0, start: 0, up: 0, down: 0, left: 0, right: 0 },
     ];
-    const controllerRead = function (port) {
+    const controllerRead = function (port) { if (frameCount>=400&&frameCount<410&&port===0) console.log('READ f'+frameCount+' strobe='+strobe+' val='+(strobe?padStates[0]&1:padShift[0]&1));
       const p = port === 0 ? 0 : 1;
       if (strobe) return padStates[p] & 1;
       const v = padShift[p] & 1;
@@ -563,7 +515,7 @@
     };
     const controllerWrite = function (v) {
       strobe = (v & 1) === 1;
-      if (strobe) { padStates[0] = packPad(0); padStates[1] = packPad(1); padShift[0] = padStates[0]; padShift[1] = padStates[1]; }
+      if (strobe) { padStates[0] = packPad(0); padStates[1] = packPad(1); padShift[0] = padStates[0]; padShift[1] = padStates[1]; if (frameCount>=400&&frameCount<410) console.log('CAPTURE f'+frameCount+' p0='+padStates[0].toString(16)+' p1='+padStates[1].toString(16)); }
     };
 
     // ------------------------------------------------------------ video
@@ -583,80 +535,27 @@
       const fineX0 = ppu.fineX, sx = ppu.scrollX, sy = ppu.scrollY;
       const showBg = (mask & 0x08) !== 0;
       const showSp = (mask & 0x10) !== 0;
-      const spPat = spPatOf(); /* sprite pattern table ไม่เปลี่ยนกลางเฟรม */
+      const bgPat = bgPatOf(), spPat = spPatOf();
       ppu.sp0HitFrame = false;
-
-      /* ---- สร้าง per-scanline scroll table จาก scrollLog ----
-         แต่ละ entry ใน scrollLog มี { cycles, sx, sy, ctrl }
-         แปลง cycles เป็น scanline ที่ scroll นั้น "เริ่มมีผล"
-         (1 scanline = CYCLES_PER_FRAME / 262 CPU cycles)
-         scanline 0..239 = visible lines, 240..261 = vblank
-
-         กลยุทธ์:
-         - entry แรกสุด (เขียนใน NMI ก่อน rendering) ใช้กับทุก scanline เป็น default
-         - entry หลังๆ ที่เขียนหลัง sprite-0 hit (mid-frame) จะเริ่มมีผลตั้งแต่
-           scanline ที่สอดคล้องกับ cycle นั้น */
-      const cyclesPerLine = CYCLES_PER_FRAME / 262;
-      const log = ppu.scrollLog;
-
-      /* สร้าง array scroll สำหรับแต่ละ scanline 0-239 */
-      let lineSx, lineSy, lineCtrl;
-      /* ctrl ณ end-of-frame ใช้ได้สำหรับทุก scanline —
-         เกมทั่วไปเขียน $2000 ใน NMI หลัง $2005 เสมอ ดังนั้น ppu.ctrl
-         สุดท้ายคือค่าที่ถูกต้องสำหรับ nametable base / bgPat / spPat */
-      const frameCtrl = ppu.ctrl;
-      if (log.length === 0) {
-        /* ไม่มี log เลย — ใช้ค่าปัจจุบัน */
-        lineSx = new Uint8Array(240).fill(sx);
-        lineSy = new Uint8Array(240).fill(sy & 0xFF);
-        lineCtrl = new Uint8Array(240).fill(frameCtrl);
-      } else {
-        lineSx   = new Uint8Array(240);
-        lineSy   = new Uint8Array(240);
-        lineCtrl = new Uint8Array(240);
-        /* scroll sx/sy อาจเปลี่ยนกลางเฟรม (split-scroll via sprite-0 hit)
-           แต่ ctrl ใช้ค่า end-of-frame ตลอด */
-        let curSx = log[0].sx, curSy = log[0].sy & 0xFF;
-        let logIdx = 1;
-        for (let y = 0; y < 240; y++) {
-          const lineStart = y * cyclesPerLine;
-          while (logIdx < log.length && log[logIdx].cycles <= lineStart) {
-            curSx = log[logIdx].sx;
-            curSy = log[logIdx].sy & 0xFF;
-            logIdx++;
-          }
-          lineSx[y]   = curSx;
-          lineSy[y]   = curSy;
-          lineCtrl[y] = frameCtrl;
-        }
-      }
 
       if (showBg) {
         for (let y = 0; y < 240; y++) {
-          const sx = lineSx[y], sy = lineSy[y];
-          const ntSelect = lineCtrl[y] & 3; /* bit1=vnt base, bit0=hnt base */
           const vy = sy + y;
           const ty = vy >> 3;
           const fy = vy & 7;
           const rowOff = ty & 31;
+          const vnt = (ty >> 5) & 1;
           const rowBase = y * 256;
           const attrRow = (rowOff >> 2) * 8;
-          const bgPat = (lineCtrl[y] & 0x10) ? 0x1000 : 0;
-          /* แถวเกิน 256px (ty >= 32) ให้ข้ามไปอีก nametable แนวตั้ง (flip bit1 ของ ntSelect) */
-          const ntSelectRow = ntSelect ^ ((ty >> 5) ? 2 : 0);
           for (let x = 0; x < 256; x++) {
             const vx = sx + x;
             const tx = vx >> 3;
             const col = tx & 31;
-            /* คอลัมน์เกิน 256px (tx >= 32) ให้ข้ามไปอีก nametable แนวนอน (flip bit0) */
-            const ntSelectFinal = ntSelectRow ^ ((tx >> 5) ? 1 : 0);
-            /* แปลง ntSelect (0-3) เป็น logical nametable address แล้วส่งผ่าน ppuMap
-               เพื่อ apply horizontal/vertical mirror ตาม ROM config อย่างถูกต้อง */
-            const logicalNt = 0x2000 + ntSelectFinal * 0x400;
-            const ntBase = ppuMap(logicalNt);
+            const hnt = (tx >> 5) & 1;
+            const ntBase = 0x2000 + (((vnt * 2 + hnt) & 1) * 0x400);
             const tAddr = ntBase + rowOff * 32 + col;
             const tile = vram[tAddr];
-            const attr = vram[ppuMap(logicalNt + 0x3C0) + attrRow + (col >> 2)];
+            const attr = vram[ntBase + 0x3C0 + attrRow + (col >> 2)];
             /* สเปก NES: attribute byte แบ่งเป็น 4 quadrant (2x2 tiles) —
                shift = 0/2 (คอลัมน์คู่/คี่ของ quadrant) + 0/4 (แถวคู่/คี่ของ quadrant) */
             const shift = ((col & 2) ? 2 : 0) | ((rowOff & 2) ? 4 : 0);
@@ -729,7 +628,6 @@
         cpu.PC = rom ? rom.vectors.reset : 0x8000;
         if (rom && rom.nrom128) cpu.PC = ((cpu.PC & 0x3FFF) | 0x8000); /* NROM-128: mirror เข้าช่วงที่มี case */
         ppu.ctrl = ppu.mask = ppu.status = 0; ppu.oamAddr = 0; ppu.w = 0; ppu.v = ppu.t = 0; ppu.fineX = 0; ppu.scrollX = ppu.scrollY = 0;
-        ppu.scrollLog = []; ppu.scrollPendingX = -1;
         ppu.vram.fill(0);
         if (rom) ppu.vram.set(rom.chr.subarray(0, 0x2000), 0);
         ppu.vram[0x3F00] = 0x0F;
@@ -824,10 +722,6 @@
     ppu.enterVBlank = function () {
       if (ppu.status & 0x80) return; /* already asserted */
       ppu.status |= 0x80;
-      ppu.status &= ~0x40; /* เริ่มเฟรมใหม่: sprite-0 hit ถูกรีเซ็ต (ค้างจากเฟรมก่อน) */
-      ppu.sp0HitDone = false;
-      ppu.scrollLog = [];   /* เริ่มเฟรมใหม่: ล้าง split-scroll log */
-      ppu.scrollPendingX = -1;
       if (ppu.ctrl & 0x80) cpu.nmi = true;
     };
 

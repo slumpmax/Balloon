@@ -345,6 +345,9 @@
 
   function loadGame(game) {
     if (currentGame && game.id === currentGame.id) return;
+    /* หยุดเสียงจากเกมเก่าก่อนทันที ป้องกันโน้ตค้างขณะโหลดเกมใหม่ */
+    if (sys) { sys.stopAudio(); sys = null; }
+    running = false;
     statusEl.textContent = 'กำลังโหลด ' + game.title + '...';
     loadScriptOnce(game.romFile, function () {
       var rom = window[game.globalKey];
